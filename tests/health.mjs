@@ -384,4 +384,95 @@ await test("The health record is loaded, saved and probed at the moments the wor
   assert.match(background, /health\.forget\(\);/, "pressing Run by hand is what clears a standing condition");
 });
 
+/* ------------------------------------------------- a feed that comes back */
+
+/**
+ * The night this is taken from: a Jobright read timed out at 01:01, the
+ * feed was the only one enabled, and the condition it raised held the
+ * supervisor off until the machine was found in the morning. Seven hours
+ * of clock, five and a half idle, nine applications sent. Nothing was
+ * broken by then - the feed answered fine later - but only a person could
+ * clear the condition, and there was no person until eight.
+ */
+await test("A feed that dies is retried on a backoff rather than being dropped for the day", () => {
+  let clock = Date.parse("2026-11-09T01:01:00Z");
+  const health = createHealth({ now: () => clock });
+  const plan = (blocked) => nextRun({
+    ledger: emptyLedger("2026-11-09"),
+    settings: withScheduleDefaults({ autopilot: true }),
+    stopReason: { code: "health", message: "jobright can no longer be read" },
+    blocked,
+    now: clock,
+  });
+
+  health.source("jobright", { ok: false, message: "Jobright feed inspection did not respond within 50 seconds", fatal: true });
+  assert.ok(health.stop(), "the last source dying still stops the run that is going");
+  assert.equal(plan(Boolean(health.stop())).start, false);
+  assert.equal(plan(Boolean(health.stop())).watch, true, "the alarm is kept so the retry can happen at all");
+  assert.deepEqual(health.sourcesDue(), []);
+
+  clock += 9 * 60000;
+  assert.ok(health.stop(), "nine minutes in it is still too early to try again");
+
+  clock += 90000;
+  assert.equal(health.stop(), null, "ten minutes in the supervisor is free to start a run");
+  assert.deepEqual(health.sourcesDue(), ["jobright"], "and the run knows which source to pick back up");
+  assert.equal(plan(Boolean(health.stop())).start, true);
+  // The condition itself is still standing and still on the panel. Being
+  // past its backoff makes it worth retrying, not resolved.
+  assert.ok(health.conditions().some((record) => record.name === "source-dead:jobright"));
+
+  // Second failure: the wait doubles rather than repeating, so a feed that
+  // really has gone is not read every ten minutes until morning.
+  health.source("jobright", { ok: false, message: "still not answering", fatal: true });
+  assert.ok(health.stop());
+  assert.deepEqual(health.sourcesDue(), []);
+  clock += 19 * 60000;
+  assert.ok(health.stop(), "the second wait is longer than the first");
+  clock += 2 * 60000;
+  assert.equal(health.stop(), null);
+
+  // The wait is capped, or a feed that fails all evening ends up with a
+  // retry scheduled after the night it was meant to work.
+  for (let i = 0; i < 8; i += 1) health.source("jobright", { ok: false, fatal: true });
+  const capped = health.conditions().find((record) => record.name === "source-dead:jobright");
+  assert.ok(capped.retryAt - clock <= 60 * 60000, "an hour is as long as a dead feed is ever left alone");
+
+  // And when it answers again the condition goes, rather than standing on
+  // the panel describing an outage that ended.
+  health.source("jobright", { ok: true });
+  assert.equal(health.stop(), null);
+  assert.deepEqual(health.sourcesDue(), []);
+  assert.equal(health.conditions().length, 0);
+});
+
+await test("A dead feed beside healthy ones is still only degraded, and still comes back", () => {
+  let clock = Date.parse("2026-11-09T01:01:00Z");
+  const health = createHealth({ now: () => clock });
+  health.source("jobright", { ok: false, message: "timed out", fatal: false });
+  assert.equal(health.stop(), null, "one feed of three is a reason to lean on the others, not to stop");
+  assert.equal(health.conditions()[0].severity, "degraded");
+  clock += 10 * 60000;
+  assert.deepEqual(health.sourcesDue(), ["jobright"]);
+});
+
+await test("A retry window survives the worker being restarted", () => {
+  let clock = Date.parse("2026-11-09T01:01:00Z");
+  const first = createHealth({ now: () => clock });
+  first.source("jobright", { ok: false, fatal: true });
+  const saved = { day: first.day, boards: [], conditions: first.conditions() };
+
+  clock += 11 * 60000;
+  const restored = createHealth({ now: () => clock }).restore(saved);
+  assert.equal(restored.stop(), null, "a restart must not reset the clock the backoff is measured on");
+  assert.deepEqual(restored.sourcesDue(), ["jobright"]);
+});
+
+await test("The run loop picks a revived source back up mid-night", () => {
+  // background.js cannot be imported, so the seam is read as text.
+  assert.match(background, /for \(const name of health\.sourcesDue\(\)\)/, "the run asks which dead sources are due");
+  assert.match(background, /if \(!retired\.delete\(name\)\) continue;/, "and takes them out of the retired set");
+  assert.match(background, /discovery\.revive\(name\)/, "and hands their slot back to the round counter");
+});
+
 console.log(`${count} health and escalation checks passed.`);

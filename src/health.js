@@ -140,6 +140,15 @@ export function mailSignal(result = {}) {
 }
 
 /** An attempt that reached a form. Duplicates and dry runs prove nothing either way. */
+/**
+ * How long a dead discovery source is left alone before it is tried again,
+ * doubling from the first figure and capped at the second. Ten minutes is
+ * long enough that a feed under load is not hammered, short enough that a
+ * transient outage costs a handful of applications rather than a night.
+ */
+const SOURCE_RETRY_BASE_MS = 10 * 60000;
+const SOURCE_RETRY_MAX_MS = 60 * 60000;
+
 const counted = (status) => ["submitted", "unconfirmed", "failed", "manual", "abandoned"].includes(status);
 const succeeded = (status) => status === "submitted" || status === "unconfirmed";
 
@@ -421,17 +430,44 @@ export function createHealth({ settings = {}, now = () => Date.now() } = {}) {
      *
      * Degraded rather than stop while any other source still answers: one
      * dead feed is a reason to lean on the others, not to end the night.
+     *
+     * Dead is never permanent. A feed that timed out at one in the morning
+     * used to stay dropped until somebody noticed, and on a machine where
+     * it was the only source enabled that was the whole night: seven hours
+     * of wall clock, five and a half of them idle, nine applications sent.
+     * Most outages are not the markup changing - they are a slow minute on
+     * somebody else's server - so the condition carries the time it is
+     * next worth trying, doubling from ten minutes to an hour so a feed
+     * that really is gone is not hammered until morning.
      */
     source(name, { ok = true, message = "", fatal = false } = {}) {
       const at = now();
       roll(at);
       if (ok) { clear(`source-dead:${name}`); return this; }
-      raise(`source-dead:${name}`, {
+      const key = `source-dead:${name}`;
+      const tries = (live.get(key)?.tries ?? 0) + 1;
+      const waitMs = Math.min(SOURCE_RETRY_MAX_MS, SOURCE_RETRY_BASE_MS * 2 ** (tries - 1));
+      const record = raise(key, {
         title: `${name} can no longer be read`,
-        detail: `${message || "the source could not be read"}. It has been dropped from this run's rotation and the remaining sources carry on${fatal ? ", but it was the last one standing, so there is nothing left to discover from" : ""}.`,
+        detail: `${message || "the source could not be read"}. It has been dropped from this run's rotation and the remaining sources carry on${fatal ? ", but it was the last one standing, so there is nothing left to discover from" : ""}. It will be tried again in ${Math.round(waitMs / 60000)} minutes.`,
         severity: fatal ? "stop" : "degraded",
       });
+      record.tries = tries;
+      record.retryAt = at + waitMs;
       return this;
+    },
+
+    /**
+     * The dead sources whose backoff has run out, ready to be tried again.
+     *
+     * A run asks this between rounds so a feed that recovered mid-night is
+     * picked back up without waiting for the run to end.
+     */
+    sourcesDue() {
+      const at = now();
+      return [...live.entries()]
+        .filter(([key, record]) => key.startsWith("source-dead:") && record.retryAt > 0 && at >= record.retryAt)
+        .map(([key]) => key.slice("source-dead:".length));
     },
 
     /* ------------------------------------------------------- the answers */
@@ -485,9 +521,17 @@ export function createHealth({ settings = {}, now = () => Date.now() } = {}) {
       return this;
     },
 
-    /** Whether the day should end here, and the sentence the applicant reads. */
+    /**
+     * Whether the day should end here, and the sentence the applicant reads.
+     *
+     * A dead source past its backoff is not a stop: it is the reason to
+     * start the next run rather than to refuse it. Holding the supervisor
+     * off while the condition stood is what turned one timed-out feed into
+     * an idle night, because nothing but a person could ever clear it.
+     */
     stop() {
-      const bad = this.conditions().find((record) => record.severity === "stop");
+      const at = now();
+      const bad = this.conditions().find((record) => record.severity === "stop" && !(record.retryAt > 0 && at >= record.retryAt));
       return bad ? { code: "health", condition: bad.name, message: `${bad.title}. ${bad.detail}` } : null;
     },
 

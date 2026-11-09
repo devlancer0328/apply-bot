@@ -17,6 +17,14 @@ export class DiscoveryRounds {
    * an empty round, so leaving it counted means the run can never finish.
    */
   retire(source){this.sourceCount=Math.max(0,this.sourceCount-1);this.empty.delete(source);this.passNew.delete(source);this.failures.delete(source);}
+  /**
+   * A retired source given another go once its backoff has run out, with
+   * its slot in the count handed back so a round it finds nothing in can
+   * still end the run. Its failure tally starts from zero: the three
+   * strikes that retired it are spent, and carrying them forward would
+   * retire it again on the first stumble after an hour of waiting.
+   */
+  revive(source){this.sourceCount+=1;this.failures.set(source,0);}
 }
 export function runSummary(run){return run?.running&&run?.stopping?'Stop requested. Waiting for active operations to finish; no further forms will start.':run?.stopReason?.message||(run?.running?'Run in progress.':'No run recorded yet.');}
 export function elapsedText(ms){const seconds=Math.max(0,Math.floor(ms/1000));return seconds>=60?`${Math.floor(seconds/60)}m ${seconds%60}s`:`${seconds}s`;}

@@ -3655,6 +3655,14 @@ async function runInternal() {
     let going = true;
 
     while (going && !state.stopping) {
+      // A source retired earlier in this run whose backoff has run out. A
+      // run that keeps going all night would otherwise never touch it
+      // again, however long ago the outage ended.
+      for (const name of health.sourcesDue()) {
+        if (!retired.delete(name)) continue;
+        discovery.revive(name);
+        log('info', `Trying ${SOURCE_NAMES[name] || name} again.`);
+      }
       const live = visits.filter((name) => !retired.has(name));
       if (turn >= 0 && live.length === 0) break;
       const where = turn < 0 ? "loaded" : live[turn % live.length];
