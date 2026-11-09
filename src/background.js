@@ -13,7 +13,7 @@ import { answerFitsControl, resolveField, resolveForm, wantsProse } from "./answ
 import {isDemographicQuestion} from './demographics.js';
 import { answerAll, answerQuestion, AiError } from "./ai.js";
 import { candidateFrom, checkWriter, educationFrom, WriterError, writeApplication,completeApplicationSupport } from "./writer.js";
-import {applicationNeeds,extractionResting,applicationPriority,protectsCompany} from './application-needs.js';
+import {applicationNeeds,extractionResting,applicationPriority,protectsCompany,bankedJobs} from './application-needs.js';
 import { describe as describeSpend, resetRun as resetSpend, runTotal } from "./spend.js";
 import { atsOf, FILLABLE } from "./ats.js";
 import {isDiscoveryUrl,readOriginalPosting,verifiedOriginal} from './original-posting.js';
@@ -3540,8 +3540,8 @@ async function runInternal() {
     remember();
     return kept.filter(Boolean);
   };
-  const chooseCandidates=async rawItems=>{
-    const items=await scoreCandidates(rawItems);
+  const chooseCandidates=async rawItems=>chooseCompanyRoles(await scoreCandidates(rawItems));
+  const chooseCompanyRoles=async items=>{
     const byId=new Map(items.map(item=>[item.job.id,item]));
     const {selected,alternatives}=selectCompanyRoles(items.map(i=>i.job),{limit:scheduleSettings.perCompanyPerDay,room:job=>employers.room(job.company,[job.sourceUrl,job.applyUrl])});
     for(const job of alternatives){const reason=`This employer's ${scheduleSettings.perCompanyPerDay} role(s) for today are already taken.`;await saveJob({...job,stage:'alternative',reason});jobActivity({...job,url:job.id},'alternative',reason);}
@@ -3714,6 +3714,56 @@ async function runInternal() {
     const completedFeeds=new Set();
     const retired=new Set();
     let going = true;
+
+    /**
+     * Resumes written by an earlier run, sent before anything new is
+     * discovered.
+     *
+     * Writing and sending are two different jobs that fail for two
+     * different reasons - writing needs ChatGPT, sending needs a browser
+     * and a board that is answering - and the handoff between them has
+     * always been a row in SQLite at `documents-ready`. What was missing
+     * is anybody picking that row up again. A run that was stopped, or
+     * that hit its target, or whose board went quarantined with documents
+     * already banked, left finished work on the floor: the next run began
+     * at discovery and wrote new resumes for new postings while the old
+     * ones aged out.
+     *
+     * So the bank is drained first. It is the cheapest work available -
+     * `prepareCandidate` reuses documents it finds still valid and only
+     * regenerates what has gone stale - and it is the work most likely to
+     * be lost if it waits, because the compensation research inside a
+     * document expires after six hours and postings close.
+     *
+     * Everything goes through the same batch machinery as a fresh
+     * posting, deliberately: the per-employer limits, the board pacing,
+     * the duplicate claim and the daily target are not things a second
+     * code path should be trusted to reimplement.
+     */
+    const drainBanked = async () => {
+      const banked = bankedJobs(await allJobs().catch(() => []), {
+        seen: seenThisRun,
+        duplicate: (job) => duplicates.matchCompany(job.company, job.applyUrl, job.sourceUrl) || duplicates.match(job.applyUrl, job.sourceUrl),
+      });
+      if (!banked.length) return;
+      log('info', `${banked.length} posting(s) already have documents from an earlier run; sending those before discovering anything new.`);
+      const entries = banked.map((job) => ({ entry: { link: job.sourceUrl || job.applyUrl, company: job.company, title: job.title, resumeId: job.resumeLocked ? job.resumeId : '' }, job }));
+      for (const { job } of entries) { seenThisRun.add(job.id); jobClocks.set(job.id, startClock()); knownJobs.set(job.id, job); }
+      for (let offset = 0; offset < entries.length && !state.stopping && remaining() > 0; offset += scheduleSettings.attemptConcurrency * 2) {
+        await stagedBatch(entries.slice(offset, offset + scheduleSettings.attemptConcurrency * 2), {
+          // Already extracted, already screened, already scored for fit -
+          // all of that is why there is a document. Re-running any of it
+          // would be paying twice for an answer that is on the row.
+          extract: (item) => item, screen: (item) => item, choose: chooseCompanyRoles,
+          prepare: prepareCandidate, apply: applyCandidate, remaining,
+          prepareConcurrency: workers.effective, applyConcurrency: scheduleSettings.attemptConcurrency,
+          readyBacklog: scheduleSettings.documentBacklog, applyDeadlineMs: attemptDeadline, stopGraceMs: STOP_GRACE_MS,
+          onAbandoned: (item, ms) => { abandonCandidate(item, ms).catch(() => {}); },
+          stopped: () => state.stopping, phase,
+        });
+      }
+    };
+    await drainBanked();
 
     while (going && !state.stopping) {
       // A source retired earlier in this run whose backoff has run out. A
