@@ -58,12 +58,18 @@ The bot uses your existing sessions and cannot sign in for you.
 2. **My resumes** — upload at least one resume. It is the raw material every
    tailored version is written from.
 3. **Job sources** — paste a few job links and press **Load links**.
-4. **Settings → Application mode** — leave **Review before sending** *on* for the
-   first run, so you can read what it produced before anything is sent.
-5. **Run monitor → Start run**.
+4. **Run monitor → Start run**.
 
-Watch the first few. When you are happy with the answers it writes, turn
-**Review before sending** off and let it submit.
+Out of the box the bot **submits for real**, collects jobs from feeds, and keeps
+starting runs until the daily target is met. That is deliberate — a default that
+quietly does nothing is not the safe choice it looks like. The thing actually
+protecting you is step 1: a run refuses to start until your profile carries a
+name, email, phone, location, start date and work-authorisation answer, so an
+unconfigured install cannot send anything.
+
+If you would rather read what it writes before anything leaves your machine, turn
+**Review before sending** *on* in **Settings → Application mode** before step 4,
+watch the first few, then turn it back off.
 
 ---
 
@@ -140,8 +146,8 @@ filter uses **Save role filter**, and the optional filters use **Save filters**.
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Review before sending** | On | Fills forms and leaves them open instead of submitting. The safe way to see what it writes. Turn off to apply for real. |
-| **Application attempts per run** | 5 | Stops the run after this many attempts. `0` means unlimited. Skipped, filtered and unsupported listings don't count. |
+| **Review before sending** | Off | Fills forms and leaves them open instead of submitting. Off by default, so the bot submits for real. Turn it **on** for a first run if you want to read what it writes before anything is sent. |
+| **Application attempts per run** | 0 (unlimited) | Stops the run after this many attempts. `0` means unlimited. Skipped, filtered and unsupported listings don't count. |
 | **Confirmed submissions per run** | 0 | Stops after this many *confirmed* submissions. `0` means no target. Set attempts to `0` to keep trying until this is met. Needs automatic submission. |
 | **Pause between jobs (ms)** | 2000 | A flat wait between jobs. Separate from the per-board and per-employer pacing below. |
 | **Form filler** | Apply module | *Apply module* drives each board through its own adapter and will attempt careers pages no adapter recognises. *Original filler* is the older code path — switch back if a board starts misbehaving. |
@@ -195,7 +201,7 @@ This card saves with its own **Save day plan** button, not *Save changes*.
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Keep starting runs until the target is met** (autopilot) | Off | Starts the next run by itself when one finishes, is interrupted, or finds nothing new. **Pressing Stop turns this off.** |
+| **Keep starting runs until the target is met** (autopilot) | On | Starts the next run by itself when one finishes, is interrupted, or finds nothing new. **Pressing Stop turns this off.** |
 | **Confirmed submissions per day** | 300 | The daily ceiling, counted across every run since midnight in your timezone, surviving Chrome restarts. `0` means no ceiling. 300 needs roughly 12.5 an hour sustained *and* 300 fresh postings a day on fillable boards. |
 | **Applications at a time** | 2 | 1 to 4. An application waiting on an emailed code gives up its slot, so 2 is usually right; more adds tab contention without throughput. |
 | **Seconds between applications to one board** | 45 | Per board, not overall. Applying to one board at machine speed invites a block, **which costs every remaining application on that board**, not just the current one. |
@@ -283,7 +289,7 @@ and a `job-link.txt` beside the resume PDF.
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Collect jobs from feeds** | Off | Runs use loaded links first, then visit enabled feeds |
+| **Collect jobs from feeds** | On | Runs use loaded links first, then visit enabled feeds. On by default — with it off and no links loaded, a run has no job source at all |
 | **Jobright recommendations** | On | Uses your signed-in Jobright tab |
 | **Continue until no new jobs** | On | Keeps visiting feeds until a complete round finds nothing new. Filtered jobs do not end a run. Set *Application attempts per run* to `0` to remove the attempt limit |
 | **Hiring Cafe search URL** | empty | Set your filters on Hiring Cafe and paste the search address here. Empty disables it |

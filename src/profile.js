@@ -7,7 +7,13 @@ export const DEFAULT_PROFILE = {
   // default: an empty list must not read as "allow nothing" on first run.
   ...ROLE_DEFAULTS,
   activeTemplateId: 'default',
-  sheetUrl: '', pastedLinks: '', pairedLinks: '', autoFetch: false, jobrightRecommend: true,
+  // Feeds on by default, because the alternative is a bot with nothing
+  // to apply to. Off, a fresh install has no job source whatsoever: a
+  // machine that ran a night this way burned through its pasted links in
+  // forty minutes and then sat idle for six and a half hours, and the
+  // run log it left behind said nothing was wrong, because from the
+  // run's point of view nothing was.
+  sheetUrl: '', pastedLinks: '', pairedLinks: '', autoFetch: true, jobrightRecommend: true,
   hiringCafeUrl: '', keepRunning: true,
   chatGptProjectUrl: '', chatGptConcurrency:2, letterInstructions: '', answerInstructions: '',
   // One High-reasoning resume is two minutes in a ChatGPT tab and is the
@@ -134,7 +140,24 @@ export const DEFAULT_PROFILE = {
   // after. See JUDGEMENT_DEFAULTS in src/answers.js for the few whose
   // answer is safe enough to ship.
   answerBank: '',
-  dryRun: true, delayMs: 2000, maxPerRun: 5, maxSubmittedPerRun:0, foregroundTabs: true,
+  // Submitting, unthrottled, is what a fresh install does.
+  //
+  // These three shipped the other way - review before sending, five
+  // attempts a run - and a night of three machines produced sixteen
+  // applications between them. One had never been taken out of review
+  // mode and had applied to nothing at all in seven hours; another ran
+  // its five attempts and stopped. Neither reported anything wrong,
+  // because neither was wrong: they were doing exactly what they had
+  // been configured to do, and the configuration was the shipped one.
+  //
+  // A default that does nothing is not the safe choice it looks like.
+  // The real guard against an unwanted application is that a run cannot
+  // start until the profile carries a name, an email, a phone, a
+  // location, a start date and a work-authorization answer (see
+  // `requiredProfileFields`, enforced in src/options.js) - so the person
+  // who has not set this up cannot submit, whatever these say, and the
+  // person who has set it up meant to.
+  dryRun: false, delayMs: 2000, maxPerRun: 0, maxSubmittedPerRun:0, foregroundTabs: true,
   exportFiles: false, generateOptionalLetters:false,
 };
 export const MANUAL_MODES = ['write', 'list', 'ignore'];

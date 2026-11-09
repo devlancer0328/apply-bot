@@ -62,8 +62,21 @@ export const SCHEDULE_DEFAULTS = {
   attemptDeadlineMs: 12 * 60000,
   /** Workday is an account, a mailed activation and a wizard, so it gets longer. */
   wizardDeadlineMs: 25 * 60000,
-  /** Keep starting runs until the day's target is met, unattended. */
-  autopilot: false,
+  /**
+   * Keep starting runs until the day's target is met, unattended.
+   *
+   * On by default, because a single run is not what this is for. A run
+   * ends whenever the loaded links are done, the feeds report nothing
+   * new, or Chrome tears the service worker down mid-attempt - and with
+   * nothing to start the next one, the day ends there. A machine that
+   * ran a night with this off finished its queue before one in the
+   * morning and did nothing for the six hours after it.
+   *
+   * Pressing Stop still turns it off, which is the only thing that
+   * should: a supervisor that restarts a run a minute after somebody
+   * stopped it is a bot that cannot be switched off.
+   */
+  autopilot: true,
   /** After an ordinary finish. */
   idleRetryMs: 60000,
   /** After the feeds reported nothing new: they refill, but not in a minute. */

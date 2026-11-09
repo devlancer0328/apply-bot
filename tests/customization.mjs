@@ -16,7 +16,11 @@ async function test(name, work) { await work(); count++; console.log(`PASS ${nam
 await test('Retired career and prompt settings cannot reappear through old imports',() => {
   const value = withDefaults({experience:[{from:'2020-01',to:''}],degree:'Invented',school:'Old default',companySize:'large',companyDescriptions:true,formatPrompt:'Old layout',tailoringInstructions:'Old resume command',firstName:'Alex'});
   for (const key of ['experience','degree','school','companySize','companyDescriptions','formatPrompt','tailoringInstructions']) assert.equal(key in value,false);
-  assert.equal(value.firstName,'Alex'); assert.equal(value.workdayPassword,''); assert.equal(value.dryRun,true);
+  assert.equal(value.firstName,'Alex'); assert.equal(value.workdayPassword,'');
+  // An import that says nothing about these gets the shipped defaults,
+  // which submit rather than park: a machine left in review mode applied
+  // to nothing for seven hours and reported itself healthy throughout.
+  assert.equal(value.dryRun,false); assert.equal(value.autoFetch,true); assert.equal(value.maxPerRun,0);
 });
 await test('Generation has no local resume or salary setting prerequisite',()=>{
   const profile = withDefaults({firstName:'Alex',lastName:'Morgan',email:'alex@example.test',phone:'555',city:'Seattle',startDate:'Two weeks',workAuthorization:'us-citizen',requiresSponsorship:'no',activeResumeId:'retired',salaryFallback:999999});
