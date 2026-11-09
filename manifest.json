@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Apply Bot — Resume Workspace",
+  "version": "4.8.3",
+  "minimum_chrome_version": "120",
+  "description": "ChatGPT-based resume generation and cited compensation research, visual templates, a document library and local SQLite storage.",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "permissions": [
+    "alarms",
+    "storage",
+    "tabs",
+    "scripting",
+    "unlimitedStorage",
+    "downloads",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open Apply Bot"
+  },
+  "side_panel": {
+    "default_path": "src/options.html"
+  },
+  "options_page": "src/options.html"
+}

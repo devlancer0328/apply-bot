@@ -1,0 +1,9 @@
+﻿{
+  "autoFetch": false,
+  "keepRunning": false,
+  "manualMode": "list",
+  "dryRun": true,
+  "maxPerRun": 5,
+  "delayMs": 2000,
+  "exportFiles": false
+}

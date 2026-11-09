@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Apply Bot · Workspace</title><link rel="stylesheet" href="workspace.css"></head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#overview"><span class="brand-mark">a<span>·</span></span><span>apply<span class="brand-light">bot</span><small>Your application workspace</small></span></a>
+    <div class="nav-label">WORKSPACE</div>
+    <nav aria-label="Workspace navigation">
+      <a href="#overview" data-view="overview"><span>◈</span>Overview</a>
+      <a href="#monitor" data-view="monitor"><span>▶</span>Run monitor</a>
+      <a href="#resumes" data-view="resumes"><span>▤</span>My resumes</a>
+      <a href="#templates" data-view="templates"><span>▦</span>Template studio</a>
+      <a href="#sources" data-view="sources"><span>↗</span>Job sources</a>
+      <a href="#jobs" data-view="jobs"><span>⌕</span>Jobs &amp; filters</a>
+      <a href="#activity" data-view="activity"><span>◷</span>Applications</a>
+      <a href="#history" data-view="history"><span>✓</span>Already applied</a>
+    </nav>
+    <div class="nav-label">PREFERENCES</div>
+    <nav aria-label="Settings navigation">
+      <a href="#profile" data-view="profile"><span>◎</span>My profile</a>
+      <a href="#settings" data-view="settings"><span>⚙</span>Settings</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="local-dot"></span> Stored on your device<small>SQLite · No application server</small><span class="version"></span></div>
+  </aside>
+  <main>
+    <header class="topbar"><span id="breadcrumb">Workspace / Overview</span><div class="topbar-right"><a class="pill" id="run-state" href="#monitor">Ready</a><a class="button quiet" id="open-workspace" hidden>Full tab ↗</a><button class="button quiet" id="refresh-tabs">Refresh connections</button></div></header>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <div id="content" aria-busy="true"><div class="loading">Opening your workspace…</div></div>
+  </main>
+  <input id="resume-import" type="file" accept=".json,.txt,.pdf,application/pdf" hidden>
+  <input id="backup-import" type="file" accept=".sqlite3,.sqlite,.db" hidden>
+  <input id="settings-import" type="file" accept=".json" hidden>
+  <input id="history-files" type="file" accept=".txt,.csv,.json" multiple hidden>
+  <input id="history-folder" type="file" webkitdirectory multiple hidden>
+  <input id="pairing-folder" type="file" webkitdirectory multiple hidden>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

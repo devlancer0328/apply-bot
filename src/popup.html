@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="ui.css" />
+    <style>
+      body {
+        width: 420px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Apply Bot</h1>
+      <a href="#" id="settings">Workspace ↗</a>
+    </header>
+
+    <p id="ready" class="note"></p>
+    <div id="setup-actions" class="note" hidden></div>
+    <p id="mode" class="status" hidden></p>
+    <p id="run-status" class="note"></p>
+    <p class="note"><a id="monitor" target="_blank">Open Run monitor ↗</a></p>
+
+    <div class="row">
+      <button id="run" class="primary" aria-describedby="ready" disabled>Run</button>
+    </div>
+    <div class="row">
+      <button id="stop" class="ghost" disabled>Stop</button>
+      <button id="probe" class="ghost">Inspect form</button>
+      <button id="export" class="ghost">Export CSV</button>
+    </div>
+
+    <div class="progress" hidden id="progress"><span style="width: 0%"></span></div>
+    <div id="log"></div>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import vm from 'node:vm';
+import {resolveField} from '../src/answers.js';
+import {extractJsonObject,parseModelJson} from '../src/vendor/generation.js';
+const profile={country:'United States',city:'Temple',state:'Texas'};
+for(const label of ['Which country are you currently based in?','What country are you currently living in?','Which country do you currently reside in?']){
+ const result=resolveField({label,type:'text',required:true},profile,{});
+ assert.equal(result.outcome,'fill',label);assert.equal(result.value,profile.country);
+}
+const country=resolveField({label:'Which country are you currently based in?',type:'select',required:true,options:[{label:'United Kingdom',value:'GB'},{label:'United States of America',value:'US'}]},profile,{});
+assert.equal(country.outcome,'fill');assert.equal(country.value,'US');
+assert.equal(resolveField({label:'Which country are you currently based in?',type:'text',required:true},{},{}).outcome,'blocked');
+console.log('PASS Current-country questions use saved residence for both text and select controls, and missing facts stay blocked');
+const authorization=resolveField({label:'Are you authorized to work in this country?',type:'text',required:true},profile,{});
+assert.notEqual(authorization.rule,'country');assert.notEqual(authorization.value,'United States');
+console.log('PASS Residence matching cannot answer work authorization from a country name');
+const ai=await readFile(new URL('../src/ai.js',import.meta.url),'utf8');
+const facts=vm.runInNewContext('('+ai.slice(ai.indexOf('function facts(context)'),ai.indexOf('/** Required fields'))+')');
+assert.match(facts({location:'Temple, Texas, United States',country:'United States'}),/Current country of residence: United States/);
+assert.match(facts({country:'United States'}),/does not establish citizenship/);
+console.log('PASS AI candidate facts include explicit residence without inferring citizenship');
+const chat=await readFile(new URL('../src/chatgpt.js',import.meta.url),'utf8');
+const declined=vm.runInNewContext('('+chat.slice(chat.indexOf('function declined(text, format)'),chat.indexOf('async function exchange(request'))+')',{parseModelJson,extractJsonObject});
+assert.equal(declined(JSON.stringify({sections:[{heading:'Experience',paragraphs:['Built tooling to prevent fabricated analytics and falsified records.']}]}),'text'),false);
+assert.equal(declined(JSON.stringify({findings:{travel:{value:'unknown',explanation:'I cannot provide a verified travel requirement.'}},sources:[]}),'json'),false);
+assert.equal(declined('I cannot fabricate employment history.','text'),true);
+assert.equal(declined('{"error":"I cannot generate fabricated experience."}','json'),true);
+assert.equal(declined('Dear hiring team, I built systems to detect fabricated records.','text'),false);
+console.log('PASS Usable resume/research JSON mentioning fabrication is not rejected; genuine refusals remain rejected');

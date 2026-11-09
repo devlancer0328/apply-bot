@@ -1,0 +1,7 @@
+node_modules/
+test-results/
+dist/
+*.log
+
+# Throwaway probes written while debugging a live run.
+probe-*.tmp.mjs
