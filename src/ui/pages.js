@@ -103,3 +103,4 @@ export function activity({results}) {
 }
 
 export {history,historyTable} from './company-history.js';
+export {questions} from './questions.js';

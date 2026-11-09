@@ -47,6 +47,7 @@ import {harvestBoards,relevantPostings,rosterSeeds} from './boards.js';
 import {roleAllowed,roleFilterActive,roleRejection,roleTerms} from './roles.js';
 import { createSlots } from "./slots.js";
 import { allLinks, allPairings, allResults, allHistory, answerPack, askedQuestions, claimSubmission, forgetKeys, readProfile, recordResult, releaseSubmission, toBase64, usedAnswers } from "./store.js";
+import { questionKey } from "./question-pack.js";
 import { suppliedApplication } from "./pairings.js";
 
 // Nothing here uses a key any more; one an earlier version saved is dropped.
@@ -929,8 +930,21 @@ async function rememberQuestions(application, entries) {
     }));
   if (!sightings.length) return;
   await askedQuestions(sightings).catch((error) => log("warn", `could not save ${sightings.length} unanswered question(s) for review: ${error.message}`));
+  // Which questions parked which application, so that answering one can
+  // pick the application back up. Without this the pack would fill with
+  // answers and nothing would ever be retried: the answer is on the
+  // Questions page and the job it unblocks is unidentifiable.
+  const id = application?.id;
+  if (id) blockedBy.set(id, [...new Set([...(blockedBy.get(id) ?? []), ...sightings.map((entry) => questionKey(entry.question, entry.company)).filter(Boolean)])]);
   log("info", `${application?.company ?? "This application"} - ${sightings.length} question(s) saved to Questions for you to answer once: ${sightings.map((entry) => `"${String(entry.question).slice(0, 60)}"`).join(", ")}`);
 }
+
+/**
+ * Questions raised during an attempt, held until the attempt's outcome
+ * is written, because the job row is only saved once at the end and the
+ * questions are discovered in the middle.
+ */
+const blockedBy = new Map();
 
 function answerContext(application, profile) {
   return {
@@ -1474,6 +1488,12 @@ function moduleServices(application, profile, context, attempt, onFatal) {
         log("warn", `${application.company} - the form asked for something that could not be prepared: ${error?.message ?? error}`);
       }
     },
+    // See rememberQuestions. The engine parks on the same two causes the
+    // direct path parks on - a blocked field, and a required question no
+    // stored fact reaches - and without this hook its parked applications
+    // were the only ones whose questions were never written down, so they
+    // were the only ones that could never be resumed.
+    remember: (entries) => rememberQuestions(application, entries),
     claimCompany: (request) => claimSubmission(request),
     // The claim's other half. Supplied here for the same reason as the
     // claim itself: there is one answer to "have we applied to this
@@ -3634,7 +3654,12 @@ async function runInternal() {
     await saveJob({...job,stage:'applying'});
     await workOne(entry,{application,result:null},attempt);
     const result=(await allResults()).find(row=>row.id===application.id);
-    await saveJob({...await getJob(job.id),stage:result?.status||'review',reason:result?.reason||'',resultId:result?.id});
+    // The questions this attempt could not answer travel onto the row with
+    // the outcome, so the Questions page can offer the job back once they
+    // are answered. Cleared when the attempt raised none, or an answered
+    // question would keep resuming a job that parked on something else.
+    const asked=blockedBy.get(job.id)??[];blockedBy.delete(job.id);
+    await saveJob({...await getJob(job.id),stage:result?.status||'review',reason:result?.reason||'',resultId:result?.id,blockedBy:asked});
     jobActivity({...job,url:job.id},result?.status||'review',result?.reason||'Application attempt finished');
   };
 

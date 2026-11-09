@@ -1,4 +1,5 @@
-import {allJobs,getJob,saveJob,stateStorage} from './store.js';
+import {allJobs,getJob,saveJob,stateStorage,allQuestions,answerAsked,forgetQuestion,answerPack} from './store.js';
+import {unblocked} from './question-pack.js';
 import {canonicalUrl} from './join.js';
 import {monitor,monitorBody} from './ui/monitor.js';
 import {deadline} from './deadline.js';
@@ -30,7 +31,7 @@ import {reloadExtension} from './update.js';
 const content = document.getElementById('content');
 document.querySelector('.sidebar-bottom .version').textContent = `Version ${chrome.runtime.getManifest().version}`;
 let data = {}, dispose, dirty = false, generation = 0, noticeTimer, previousHash = '#overview';
-const labels = { monitor:'Run monitor', jobs:'Jobs', overview:'Overview', resumes:'My resumes', templates:'Template studio', sources:'Job sources', profile:'My profile', settings:'Settings', activity:'Applications',history:'Already applied' };
+const labels = { monitor:'Run monitor', jobs:'Jobs', overview:'Overview', resumes:'My resumes', templates:'Template studio', sources:'Job sources', profile:'My profile', settings:'Settings', activity:'Applications',history:'Already applied',questions:'Questions' };
 /**
  * The same document is the side panel, where it runs at about 350px.
  *
@@ -53,8 +54,8 @@ const fail = error => notify(error,true);
 const setDirty = value => { dirty = value; };
 async function detectConnections() { data.connections = await Promise.all(pages.services.map(async service => ({ id:service.id, tab:await findTab(service.patterns) }))); }
 async function loadData() {
-  const [profile,resumes,templates,{links},pairings,results,stats,run,history,jobRows,stored] = await Promise.all([readProfile(),allResumes(),allTemplates(),allLinks(),allPairings(),allResults(),db({action:'stats'}),chrome.runtime.sendMessage({type:'state'}),allHistory(),allJobs(),stateStorage.get('schedule')]);
-  data = {profile,resumes,templates,links,pairings,results,stats,run,history,jobs:jobRows,schedule:withScheduleDefaults(stored.schedule)}; await detectConnections(); updateRunState();
+  const [profile,resumes,templates,{links},pairings,results,stats,run,history,jobRows,stored,questionRows] = await Promise.all([readProfile(),allResumes(),allTemplates(),allLinks(),allPairings(),allResults(),db({action:'stats'}),chrome.runtime.sendMessage({type:'state'}),allHistory(),allJobs(),stateStorage.get('schedule'),allQuestions().catch(()=>[])]);
+  data = {profile,resumes,templates,links,pairings,results,stats,run,history,jobs:jobRows,questions:questionRows,schedule:withScheduleDefaults(stored.schedule)}; await detectConnections(); updateRunState();
 }
 function updateRunState() {
   // A run winding down after Stop is not a green pill. It said "generating"
@@ -177,6 +178,35 @@ const actionHandlers = {
   'job-detail':async target=>{const job=await getJob(target.dataset.id);if(job)content.querySelector('#job-detail').innerHTML=jobDetails(job);},
   'queue-eligible':async()=>{await requireIdle();const selected=(await allJobs()).filter(j=>['eligible','documents-ready'].includes(j.stage)&&j.screening?.decision==='eligible');if(!selected.length)throw new Error('No eligible pending jobs to resume.');await saveLinks([...new Set([...(await allLinks()).links,...selected.map(j=>j.sourceUrl||j.applyUrl)])]);notify(selected.length+' eligible jobs added to the queue. Start Run to resume saved stages.');},
   'recheck-job':async target=>{await requireIdle();const job=await getJob(target.dataset.id);await saveJob({...job,stage:'discovered',screeningKey:'',extractedAt:0,extractionRetryAt:0,hold:false});const keys=new Set([job.id,job.sourceUrl,job.applyUrl].filter(Boolean).map(canonicalUrl)),stored=await stateStorage.get(['elsewhere','passed']);await stateStorage.set({elsewhere:(stored.elsewhere||[]).filter(id=>!keys.has(canonicalUrl(id))),passed:Object.fromEntries(Object.entries(stored.passed||{}).filter(([id])=>!keys.has(canonicalUrl(id))))});await saveLinks([...new Set([...(await allLinks()).links,job.sourceUrl||job.applyUrl])]);await renderRoute();notify('Queued for fresh extraction and research. Start Run when ready.');},
+  /* ------------------------------------------------- questions page */
+  // Saved straight to SQLite rather than batched behind one Save button:
+  // these are independent answers to independent questions, and a page of
+  // forty with one Save is a page where a mistyped fortieth loses the
+  // other thirty-nine.
+  'save-answer':async target=>{
+    const key=target.dataset.key,input=content.querySelector(`[data-question="${CSS.escape(key)}"] .answer-input`);
+    await answerAsked(key,input?.value??'');
+    await renderRoute();
+    notify(String(input?.value??'').trim()?'Answer saved. Any form asking this again is filled from it.':'Answer cleared. This question goes back on the waiting list.');
+  },
+  'forget-question':async target=>{await forgetQuestion(target.dataset.key);await renderRoute();notify('Question removed. It will come back if a form asks it again.');},
+  /**
+   * The parked applications handed back to the queue.
+   *
+   * Queued, not sent. The answer is new and the forms were last seen
+   * hours ago, so the next run reads the posting again and fills it with
+   * the answer in place - which is also what keeps this honest about an
+   * employer who closed the role in the meantime.
+   */
+  'resume-unblocked':async()=>{
+    await requireIdle();
+    const ready=unblocked(await allJobs(),await answerPack());
+    if(!ready.length)throw new Error('No parked application is waiting on an answered question.');
+    for(const job of ready)await saveJob({...job,stage:'documents-ready',hold:false,reason:'Resumed: every question it stopped on now has your answer.',blockedBy:[]});
+    await saveLinks([...new Set([...(await allLinks()).links,...ready.map(job=>job.sourceUrl||job.applyUrl)])]);
+    await renderRoute();
+    notify(`${ready.length} application${ready.length===1?'':'s'} back in the queue. Start Run to send ${ready.length===1?'it':'them'}.`);
+  },
   'hold-job':async target=>{await requireIdle();const job=await getJob(target.dataset.id);await saveJob({...job,stage:'held',hold:true,reason:'Held by you. Recheck to return it to the queue.'});await renderRoute();},
   'reload-extension':() => reloadExtension(),
   retry:renderRoute, 'start-run':startRun,

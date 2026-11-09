@@ -146,6 +146,31 @@ export function packAnswer(pack, question, company = "") {
  */
 export const fillCompany = (answer, company = "") => String(answer ?? "").replace(/\{company\}/g, String(company ?? "").trim());
 
+/**
+ * Applications parked on a question, where every question they parked on
+ * now has an answer.
+ *
+ * The point of the whole file. An answer typed on the Questions page is
+ * worth nothing until the application it was typed for is tried again,
+ * and nobody is going to remember which of last night's parked jobs was
+ * waiting on which question.
+ *
+ * Settled outcomes are never resumed. An application that reached submit
+ * is finished whatever questions it asked along the way, and sending it
+ * twice under the candidate's name is the one mistake here that cannot
+ * be taken back - so this reads as a deny list of outcomes rather than
+ * an allow list of parked stages, which would resume a stage added later
+ * and never added to the list.
+ */
+const SETTLED = new Set(["submitted", "unconfirmed", "duplicate", "closed", "applying"]);
+
+export function unblocked(jobs, pack) {
+  return (jobs ?? []).filter((job) => {
+    const keys = job?.blockedBy ?? [];
+    return keys.length > 0 && !SETTLED.has(job.stage) && keys.every((key) => isAnswered(pack?.[key]));
+  });
+}
+
 /** Unanswered first, then by how many applications the question has cost. */
 export const triage = (pack) =>
   Object.values(pack ?? {}).sort(
