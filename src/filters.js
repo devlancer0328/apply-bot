@@ -1,6 +1,7 @@
 /** Optional user-owned rules; absent evidence stays unknown. */
 import {companyKey} from './companies.js';
 import {roleAllowed,roleRejection} from './roles.js';
+import {hardBlock} from './blockers.js';
 export const FILTER_DEFAULTS={screeningEnabled:false,screeningUnknown:'balanced',screeningWorkplace:'any',screeningTravel:'any',screeningClearance:'any',screeningInterview:'any',screeningLocation:'any',screeningEmployment:'any',screeningSponsorship:'any',screeningRelocation:'any',screeningOnCall:'any',screeningTitles:'',screeningExcludedCompanies:'',screeningOtherRules:'',screeningBatchSize:12};
 export const FILTER_FIELDS={
  workplace:{label:'Work arrangement',options:[['any','Any arrangement'],['remote','Remote only'],['remote-hybrid','Remote or hybrid'],['hybrid','Hybrid only'],['onsite','On-site only']],values:['remote','hybrid','onsite']},
@@ -32,6 +33,12 @@ export function localFilter(job,profile){const p=normalizeFilters(profile);
  // suite's switch, because wanting a title filter must not oblige the
  // applicant to turn on a web-search pass over every posting as well.
  if(!roleAllowed(job.title,profile))return{decision:'rejected',reason:roleRejection(profile),findings:{},checkedAt:Date.now(),mode:'role-filter'};
+ // Outside the research switch for the same reason, and ahead of it
+ // because it costs nothing: these are postings the employer could not
+ // hire this candidate for whatever the preferences say, and paying for
+ // a web-search pass to discover that is the spend worth not making.
+ const blocked=hardBlock(job,profile);
+ if(blocked)return{decision:'rejected',reason:blocked.reason,findings:{},checkedAt:Date.now(),mode:`blocker:${blocked.rule}`};
  if(!p.screeningEnabled)return null;
  if(terms(p.screeningExcludedCompanies).some(name=>companyKey(name)===companyKey(job.company)))return{decision:'rejected',reason:'Employer is on your excluded-company list.',findings:{},checkedAt:Date.now(),mode:'user-rule'};
  const titles=terms(p.screeningTitles);if(titles.length&&!titles.some(t=>String(job.title||'').toLowerCase().includes(t.toLowerCase())))return{decision:'rejected',reason:'Job title does not match your allowed title phrases.',findings:{},checkedAt:Date.now(),mode:'user-rule'};

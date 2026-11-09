@@ -146,6 +146,26 @@ export const DEFAULT_PROFILE = {
   // recruiter corrects. One word here turns the whole class of question
   // into an answer; nothing here leaves it with a person.
   licenses: '',
+  // The security clearance held, or the word "none".
+  //
+  // Blank like the licences above and for the same reason, but this one
+  // also buys something: with "none" here, a posting demanding an active
+  // clearance is passed over in under a millisecond instead of costing a
+  // resume, a letter, a filled form and a submission before the employer
+  // rejects it on the one fact that was knowable from the start. Blank
+  // blocks nothing, because a blank is not a denial.
+  securityClearance: '',
+  // The instant rules in blockers.js: postings this candidate could not
+  // be hired for whatever else is true. On by default and still inert
+  // until the facts above are filled in, since every rule is gated on
+  // one of them.
+  hardBlockers: true,
+  // Whether a batch is scored for plausibility before any resume is
+  // written, and the score below which it is not worth writing one.
+  // One ChatGPT call per batch, no web search - see fit.js for why the
+  // threshold is this low.
+  fitCheckEnabled: true,
+  fitThreshold: 35,
   // Answers to questions no stored fact reaches, as the applicant's own
   // words: one `pattern = answer` per line, the pattern matched against
   // the question the form is asking.
@@ -197,7 +217,11 @@ export function withDefaults(stored = {}) {
   // bottleneck rather than the account.
   value.chatGptConcurrency=Math.max(1,Math.min(4,Math.floor(Number(value.chatGptConcurrency))||1));
   value.maxSubmittedPerRun=Number.isFinite(Number(value.maxSubmittedPerRun))?Math.max(0,Math.floor(Number(value.maxSubmittedPerRun))):0;
-  for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled','keepCaptchaTabs']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
+  // Capped below 80 rather than at 100. A threshold high enough to reject
+  // most of a batch turns a stored number into a bot that quietly applies
+  // to nothing, which is indistinguishable from a broken feed.
+  value.fitThreshold=Math.max(0,Math.min(80,Math.floor(Number(value.fitThreshold))||0));
+  for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled','keepCaptchaTabs','hardBlockers','fitCheckEnabled']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
   // "Review before sending" used to live here as `dryRun`, filling every
   // form and submitting none. It is gone rather than defaulted off: a
   // machine left in it ran a full night and sent nothing, and a setting

@@ -24,7 +24,7 @@ import { workableApplyUrl, workableIds, workablePosting } from "./workable.js";
 import { applyToJobApplyUrl, applyToJobIds, applyToJobPosting } from "./applytojob.js";
 import { workdayApplyUrl, workdayIds, workdayPosting, workdayPostingUrl } from "./workdayBoard.js";
 import {finishApplicationTab} from './final-page.js';
-import {allJobs,getJob,saveJob,getResume,saveResume} from './store.js';
+import {allJobs,getJob,saveJob,getResume,saveResume,allResumes} from './store.js';
 import {screenJob,screeningSignature,documentSignature,fingerprint} from './screening.js';
 import {normalizeFilters,selectCompanyRoles} from './filters.js';
 import {stagedBatch} from './pipeline.js';
@@ -48,6 +48,8 @@ import {roleAllowed,roleFilterActive,roleRejection,roleTerms} from './roles.js';
 import { createSlots } from "./slots.js";
 import { allLinks, allPairings, allResults, allHistory, answerPack, askedQuestions, claimSubmission, forgetKeys, readProfile, recordResult, releaseSubmission, toBase64, usedAnswers } from "./store.js";
 import { questionKey } from "./question-pack.js";
+import { scoreFit } from "./fit.js";
+import { documentText } from "./templates.js";
 import { suppliedApplication } from "./pairings.js";
 
 // Nothing here uses a key any more; one an earlier version saved is dropped.
@@ -3506,7 +3508,40 @@ async function runInternal() {
     await saveJob(job);remember();log(job.stage==='eligible'?'info':'warn',job.company+' - '+job.stage+': '+job.reason);
     return job.stage==='eligible'?item:null;
   };
-  const chooseCandidates=async items=>{
+  /**
+   * One plausibility score per posting, for the whole batch at once.
+   *
+   * Here rather than in `screenCandidate` because this is the only stage
+   * that holds the batch together - the point of the pass is that twelve
+   * postings cost one call instead of twelve - and because it belongs
+   * immediately before the expensive half: everything it rejects is a
+   * resume and a letter not written, which is a hundred and nine seconds
+   * of ChatGPT at the median.
+   */
+  const scoreCandidates=async items=>{
+    if(!profile.fitCheckEnabled||!items.length)return items;
+    const clock=startClock();
+    for(const {job} of items)jobActivity({...job,url:job.id},'screening','Checking fit against your profile and resume');
+    // The most recent resume, whichever kind it is: an uploaded one keeps
+    // its extracted text, a generated one only its structure. Either is
+    // the career, and the career is what the score turns on.
+    const latest=(await allResumes().catch(()=>[])).filter(row=>row.sourceText||row.document).sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))[0];
+    const scored=await scoreFit(items.map(item=>item.job),{profile,answerPack:runAnswerPack,resume:latest?.sourceText||documentText(latest?.document)},{threshold:profile.fitThreshold});
+    const kept=[];
+    for(const {job,kept:keep,score,reason} of scored){
+      const detail=score===null?reason:`Fit ${score}/100: ${reason}`;
+      if(keep){job.fitScore=score;job.fitReason=detail;kept.push(items.find(item=>item.job.id===job.id));continue;}
+      state.rejected++;
+      await saveJob({...job,stage:'rejected',reason:detail,fitScore:score,fitReason:detail});
+      jobActivity({...job,url:job.id},'rejected',detail);
+      log('info',`${job.company} - rejected before writing anything: ${detail}`);
+    }
+    log('info',`Fit check: ${kept.length} of ${items.length} posting(s) worth writing for, in ${since(clock.at)}.`);
+    remember();
+    return kept.filter(Boolean);
+  };
+  const chooseCandidates=async rawItems=>{
+    const items=await scoreCandidates(rawItems);
     const byId=new Map(items.map(item=>[item.job.id,item]));
     const {selected,alternatives}=selectCompanyRoles(items.map(i=>i.job),{limit:scheduleSettings.perCompanyPerDay,room:job=>employers.room(job.company,[job.sourceUrl,job.applyUrl])});
     for(const job of alternatives){const reason=`This employer's ${scheduleSettings.perCompanyPerDay} role(s) for today are already taken.`;await saveJob({...job,stage:'alternative',reason});jobActivity({...job,url:job.id},'alternative',reason);}
