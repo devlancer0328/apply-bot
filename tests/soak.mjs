@@ -402,7 +402,7 @@ await test("A board that starts refusing everything is cooled, then quarantined,
 
   const condition = run.health.conditions().find((record) => record.name === "board-hostile:greenhouse");
   assert.equal(condition.severity, "quarantined");
-  assert.match(condition.detail, /left alone for the rest of today/);
+  assert.match(condition.detail, /is being left alone for \d+ minutes/, "the panel says how long, because a quarantine now ends on its own");
 
   // Nothing was opened on greenhouse after the quarantine, and the gap was
   // stretched before it - the two halves of backing off.
@@ -565,7 +565,7 @@ await test("A night with every failure in it at the same time still ends with an
   // And the morning-after screen is a page a person can read, not a log.
   const html = monitorBody({ running: true, day: today, attempts: { width: 2, busy: 0, parked: 0, queued: 0, holders: [] }, health: { conditions: run.health.conditions(), screenshots: run.health.screenshots, freeBytes: run.health.freeBytes } });
   assert.match(html, /Applied to today \(\d+ employer\(s\)\)/);
-  assert.match(html, /left alone for the rest of today/);
+  assert.match(html, /is being left alone for \d+ minutes/);
   assert.doesNotMatch(html, /Needs you/, "nothing here needs a person, and saying it does is how a panel gets ignored");
   // Three hundred failures, aggregated into a handful of causes.
   assert.ok(today.reasons.length <= 8, `${today.reasons.length} distinct causes is a log, not an account`);

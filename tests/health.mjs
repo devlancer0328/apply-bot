@@ -25,6 +25,14 @@ import { dayProgress, emptyLedger, nextRun, recordOutcome, withScheduleDefaults 
 import { monitorBody } from "../src/ui/monitor.js";
 import { stopEnding } from "../src/stop-control.js";
 
+/**
+ * A local wall-clock time on the day these tests are set. The health
+ * record rolls its counters on the local day, so a UTC anchor would make
+ * every backoff test below pass or fail depending on which timezone it
+ * ran in - and the longest of them walks a board through seven hours.
+ */
+const at = (hour, minute = 0) => new Date(2026, 10, 9, hour, minute).getTime();
+
 let count = 0;
 const test = async (name, work) => { await work(); count++; console.log("PASS " + name); };
 
@@ -394,8 +402,17 @@ await test("The health record is loaded, saved and probed at the moments the wor
  * broken by then - the feed answered fine later - but only a person could
  * clear the condition, and there was no person until eight.
  */
+/**
+ * A wall-clock time on the night these tests describe, built in local time
+ * rather than UTC. The thing being measured is a wait that a day boundary
+ * cancels, and the boundary health.js uses is the machine's local
+ * midnight - so a UTC literal puts the whole test an unpredictable number
+ * of hours from the edge, and it passes or fails by timezone.
+ */
+const localTime = (hour, minute) => new Date(2026, 10, 9, hour, minute).getTime();
+
 await test("A feed that dies is retried on a backoff rather than being dropped for the day", () => {
-  let clock = Date.parse("2026-11-09T01:01:00Z");
+  let clock = localTime(1, 1);
   const health = createHealth({ now: () => clock });
   const plan = (blocked) => nextRun({
     ledger: emptyLedger("2026-11-09"),
@@ -447,7 +464,7 @@ await test("A feed that dies is retried on a backoff rather than being dropped f
 });
 
 await test("A dead feed beside healthy ones is still only degraded, and still comes back", () => {
-  let clock = Date.parse("2026-11-09T01:01:00Z");
+  let clock = localTime(1, 1);
   const health = createHealth({ now: () => clock });
   health.source("jobright", { ok: false, message: "timed out", fatal: false });
   assert.equal(health.stop(), null, "one feed of three is a reason to lean on the others, not to stop");
@@ -456,8 +473,74 @@ await test("A dead feed beside healthy ones is still only degraded, and still co
   assert.deepEqual(health.sourcesDue(), ["jobright"]);
 });
 
+/**
+ * Lever was quarantined at 01:39 on the same night, over a bad half hour,
+ * and never read again. It was one of the two boards that actually answer
+ * this bot, so the day lost most of its supply to a rule meant to stop the
+ * bot hammering a site that had put a wall up.
+ */
+await test("A quarantined board is given another go, not written off until midnight", () => {
+  let clock = localTime(1, 39);
+  const health = createHealth({ now: () => clock });
+  const fail = (n) => { for (let i = 0; i < n; i += 1) health.attempt({ status: "failed", company: `Acme ${i}`, applyUrl: LEVER, reason: "the board put up a captcha puzzle after Submit" }); };
+  const quarantine = () => { for (let i = 0; i < HEALTH_DEFAULTS.boardCools + 1; i += 1) { fail(HEALTH_DEFAULTS.boardFailures); health.remedies(); } };
+
+  quarantine();
+  assert.equal(health.quarantined("lever"), true);
+  assert.equal(health.stop(), null, "one board's bad night still never stops the day");
+
+  clock += 29 * 60000;
+  assert.equal(health.quarantined("lever"), true, "half an hour is the shortest a board is left alone");
+  clock += 2 * 60000;
+  assert.equal(health.quarantined("lever"), false, "past the wait its next posting is tried");
+  // Still on the panel. Being worth another go is not the same as being
+  // better, and the applicant should see that the board is in trouble.
+  assert.equal(health.conditions().find((record) => record.name === "board-hostile:lever")?.severity, "quarantined");
+
+  // The go it bought, spent on a refusal: straight back to quarantine on
+  // twice the wait, without having to fail three more times first.
+  fail(1);
+  assert.equal(health.quarantined("lever"), true);
+  clock += 31 * 60000;
+  assert.equal(health.quarantined("lever"), true, "the second wait is longer than the first");
+  clock += 30 * 60000;
+  assert.equal(health.quarantined("lever"), false);
+
+  // The go spent on a submission instead: the board is working, so the
+  // quarantine, the failure streak and the condition all go with it.
+  health.attempt({ status: "submitted", company: "Acme", applyUrl: LEVER });
+  assert.equal(health.quarantined("lever"), false);
+  assert.equal(health.conditions().some((record) => record.name === "board-hostile:lever"), false);
+
+  // And a board that recovered is quarantined from scratch next time,
+  // rather than inheriting the hour it had worked its way up to.
+  quarantine();
+  clock += 31 * 60000;
+  assert.equal(health.quarantined("lever"), false);
+});
+
+await test("A board that is genuinely gone is not probed every half hour until morning", () => {
+  let clock = localTime(1, 39);
+  const health = createHealth({ now: () => clock });
+  const fail = (n) => { for (let i = 0; i < n; i += 1) health.attempt({ status: "failed", company: `Acme ${i}`, applyUrl: LEVER, reason: "the board put up a captcha puzzle after Submit" }); };
+  for (let i = 0; i < HEALTH_DEFAULTS.boardCools + 1; i += 1) { fail(HEALTH_DEFAULTS.boardFailures); health.remedies(); }
+
+  // Each go is spent on a refusal, so the wait doubles every time. Five
+  // rounds is about seven hours, which keeps the whole thing inside one
+  // day - a day boundary clears the board outright and would hide the
+  // cap rather than test it.
+  const waits = [];
+  for (let round = 0; round < 5; round += 1) {
+    const since = clock;
+    while (health.quarantined("lever")) clock += 60000;
+    waits.push(Math.round((clock - since) / 60000));
+    fail(1);
+  }
+  assert.deepEqual(waits, [30, 60, 120, 120, 120], "half an hour, doubling, and never more than two");
+});
+
 await test("A retry window survives the worker being restarted", () => {
-  let clock = Date.parse("2026-11-09T01:01:00Z");
+  let clock = localTime(1, 1);
   const first = createHealth({ now: () => clock });
   first.source("jobright", { ok: false, fatal: true });
   const saved = { day: first.day, boards: [], conditions: first.conditions() };

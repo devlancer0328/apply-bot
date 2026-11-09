@@ -149,6 +149,16 @@ export function mailSignal(result = {}) {
 const SOURCE_RETRY_BASE_MS = 10 * 60000;
 const SOURCE_RETRY_MAX_MS = 60 * 60000;
 
+/**
+ * The same arrangement for a quarantined board, on a longer scale. A board
+ * that is refusing the bot is usually rate-limiting it or has put a wall
+ * up, and both ease off over an hour rather than a minute; the wait is
+ * longer than a feed's so the probe is not itself the thing keeping the
+ * wall up. Capped at two hours, which over a night is five or six goes.
+ */
+const BOARD_RETRY_BASE_MS = 30 * 60000;
+const BOARD_RETRY_MAX_MS = 2 * 3600000;
+
 const counted = (status) => ["submitted", "unconfirmed", "failed", "manual", "abandoned"].includes(status);
 const succeeded = (status) => status === "submitted" || status === "unconfirmed";
 
@@ -294,7 +304,12 @@ export function createHealth({ settings = {}, now = () => Date.now() } = {}) {
       const refusal = boardSignal(result);
       if (board && (refusal === "ok" || refusal === "refused")) {
         const entry = boards.get(board) ?? { fails: 0, quarantined: 0 };
-        if (refusal === "ok") { entry.fails = 0; clear(`board-hostile:${board}`); }
+        // A quarantine that has run its course, and this result is the one
+        // go it bought. Dropping the flag here is what lets a second
+        // refusal quarantine the board again straight away, on a longer
+        // wait, instead of making it fail three more times first.
+        if (entry.quarantined && entry.quarantineUntil > 0 && at >= entry.quarantineUntil) entry.quarantined = 0;
+        if (refusal === "ok") { entry.fails = 0; entry.quarantined = 0; entry.quarantineUntil = 0; entry.quarantines = 0; clear(`board-hostile:${board}`); }
         else entry.fails += 1;
         boards.set(board, entry);
         if (entry.fails >= limits.boardFailures && !entry.quarantined) {
@@ -308,10 +323,19 @@ export function createHealth({ settings = {}, now = () => Date.now() } = {}) {
           // to stop applying through the other six, and a quarantine costs
           // only the postings on that board.
           if (record.tried >= limits.boardCools) {
+            // Until midnight was the old answer, and on the night this was
+            // written Lever was quarantined at 01:39 and never tried
+            // again - a whole day of one of the two boards that actually
+            // answer, thrown away over a bad half hour. It is left alone
+            // for a while and then given one posting to prove itself on.
+            entry.quarantines = (entry.quarantines ?? 0) + 1;
+            const waitMs = Math.min(BOARD_RETRY_MAX_MS, BOARD_RETRY_BASE_MS * 2 ** (entry.quarantines - 1));
             entry.quarantined = at;
+            entry.quarantineUntil = at + waitMs;
             record.pending = false;
             record.severity = "quarantined";
-            record.detail = `${board} is being left alone for the rest of today: ${entry.fails} failures in a row survived ${record.tried} cool-down(s). Its postings are skipped; everything else carries on.`;
+            record.retryAt = entry.quarantineUntil;
+            record.detail = `${board} is being left alone for ${Math.round(waitMs / 60000)} minutes: ${entry.fails} failures in a row survived ${record.tried} cool-down(s). Its postings are skipped until then; everything else carries on.`;
           }
         }
       }
@@ -536,7 +560,19 @@ export function createHealth({ settings = {}, now = () => Date.now() } = {}) {
     },
 
     /** A board left alone for the rest of the day. Its postings are not opened. */
-    quarantined(board) { return Boolean(board && boards.get(board)?.quarantined); },
+    /**
+     * A board left alone, and whether it still is. Its postings are not
+     * opened while this is true. A quarantine past its wait reads as over
+     * here so the next posting on that board is tried; whether the board
+     * has actually recovered is decided by what that posting does, in
+     * `result` above. A record restored from before quarantines had a wait
+     * has none, and keeps the old meaning of lasting until midnight.
+     */
+    quarantined(board) {
+      const entry = board && boards.get(board);
+      if (!entry?.quarantined) return false;
+      return !(entry.quarantineUntil > 0 && now() >= entry.quarantineUntil);
+    },
 
     /** How much to stretch a board's pacing gap while it is cooling off. */
     boardFactor(board) {

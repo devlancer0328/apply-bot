@@ -2746,7 +2746,7 @@ async function readyWriter(profile) {
 async function treatConditions() {
   for (const { remedy, board } of health.remedies()) {
     if (remedy === "reset-mailbox") await reloadMailbox();
-    else if (remedy === "cool-board") log("warn", `${board} is failing on every attempt, so applications there are being spaced much further apart. If it keeps failing it will be left alone for the rest of today and the other boards will carry the night.`);
+    else if (remedy === "cool-board") log("warn", `${board} is failing on every attempt, so applications there are being spaced much further apart. If it keeps failing it will be left alone for a while, tried again later, and the other boards will carry the night.`);
     else if (remedy === "skip-screenshots") log("warn", `Disk is running low, so the picture of the last page is no longer being saved. The resume, the answers and the receipt still are.`);
   }
   keepHealth();
@@ -3598,12 +3598,13 @@ async function runInternal() {
   const applyCandidate=async item=>{
     const {job}=item;
     const board=atsOf(job.applyUrl);
-    // A board that has refused everything for a while is left alone until
-    // tomorrow rather than argued with. Checked here as well as in the
+    // A board that has refused everything for a while is left alone for a
+    // stretch rather than argued with - half an hour at first, doubling
+    // while it keeps refusing. Checked here as well as in the
     // discovery filter because a posting chosen before the quarantine was
     // imposed is already in the batch, and opening it would be one more
     // request to a host that has stopped wanting them.
-    if(health.quarantined(board)){jobActivity({...job,url:job.id},'held',`${board} is being left alone for the rest of today after failing on every attempt.`);employers.release(job.company,[job.sourceUrl,job.applyUrl]);return;}
+    if(health.quarantined(board)){jobActivity({...job,url:job.id},'held',`${board} is being left alone for a while after failing on every attempt, and will be tried again later today.`);employers.release(job.company,[job.sourceUrl,job.applyUrl]);return;}
     if(!(await paceBoard(job,board)))return;
     // One job's bad hour is not the day's. Extraction and preparation have
     // always absorbed their own failures and carried on; sending did not,

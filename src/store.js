@@ -1,4 +1,4 @@
-﻿/** Shared persistence API. Only the service worker opens SQLite. */
+/** Shared persistence API. Only the service worker opens SQLite. */
 import { databaseRequest } from './database.js';
 import { pack, unpack, bytesToBase64 } from './codec.js';
 import { withDefaults } from './profile.js';
