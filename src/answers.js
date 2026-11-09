@@ -646,7 +646,32 @@ const JUDGEMENT_DEFAULTS = [
     // any of these companies. A wrong no is corrected by the disclosure
     // the employer runs anyway.
     id: "relationship-to-employee",
-    pattern: /\b(?:related to|relative of|family member)\b[^|?]*\b(?:employee|staff|anyone (?:who )?works?)\b|personal relationship with[^|?]*\bemployee\b|\bnepotism\b/,
+    pattern: /\b(?:related to|relative of|family member|immediate family)\b[^|?]*\b(?:employee|staff|anyone (?:who )?works?)\b|personal relationship with[^|?]*\bemployee\b|\bnepotism\b/,
+    answer: "No",
+  },
+  {
+    /**
+     * The same conflict screen asked about a household rather than an
+     * employee: relatives, a spouse, a domestic partner, friends and
+     * family, anyone under this roof who works there.
+     *
+     * The rule above wants the sentence to name an employee and reaches
+     * "are you related to a current employee"; it does not reach "do you
+     * have any relatives at this company", which names only the company,
+     * nor "is your spouse employed by us", which names only a spouse. An
+     * employer asks all three for one reason - to route a conflict check
+     * - and the answer is the same each time, because the applicant has
+     * no connection of any kind to any of these companies. Nothing is
+     * claimed, and a wrong no is corrected by the disclosure the
+     * employer runs regardless.
+     *
+     * Not "have you ever worked here", which is about the applicant
+     * rather than their household and has its own rule and its own
+     * evidence; the pattern needs one of the household words to fire.
+     */
+    id: "family-at-employer",
+    pattern:
+      /\b(?:relatives?|relations|spouses?|domestic partners?|households?|next of kin|friends? or family|family (?:or|and) friends?|family members?)\b[^|?]*\b(?:employ\w*|works?|worked|working|at (?:this|our|the) (?:company|organi\w*|firm)|with (?:this|our) (?:company|organi\w*)|here\b|for us\b)/,
     answer: "No",
   },
   {
@@ -1056,6 +1081,39 @@ const RULES = [
     pattern: /background (?:check|screen)|drug (?:test|screen)|pre-?employment screening/,
     sensitive: true,
     value: (p) => yesNoAnswer(p.backgroundCheck),
+  },
+  /**
+   * Criminal history, answered from the applicant's own standing
+   * statement and from nothing else.
+   *
+   * This is a regulated denial, and the file's rule for those is that
+   * the model never writes one: the harm from a wrong answer lands on
+   * the applicant, and a resume showing no convictions is not a record
+   * showing none. What makes this answerable where a clearance is not is
+   * who holds the fact. A clearance is granted by a government and the
+   * applicant cannot create one by saying so; a criminal record is a
+   * fact about the applicant, stated once in `profile.criminalRecord`,
+   * and answering from it is reading their statement rather than
+   * guessing at it - the same trade `profile.licenses` already makes.
+   *
+   * So the profile still decides. Empty parks the question exactly as
+   * before, and `disclose` parks it too: a record that exists is a
+   * sentence only the applicant may write, and "yes" alone on a form
+   * that then asks for the circumstances is worse than a person
+   * answering both. Only a stated "none" produces an answer here.
+   *
+   * `sensitive` regardless, so no model fallback can reach around a
+   * profile that says nothing.
+   */
+  {
+    id: "criminal-record",
+    pattern:
+      /\b(?:convict\w*|felony|felonies|misdemean\w*|criminal (?:record|histor\w*|offen\w*|conviction\w*|background|charge\w*|case\w*|proceeding\w*)|plead(?:ed|s)? (?:guilty|no contest)|nolo contendere|under indictment|indicted|incarcerat\w*)\b/,
+    // A consent to run a criminal background check is a different
+    // question with its own profile answer, and it must keep it.
+    when: (field) => !/background (?:check|screen)|drug (?:test|screen)|pre-?employment screening/.test(askedSubject(field)),
+    sensitive: true,
+    value: (p) => (String(p.criminalRecord ?? "").trim().toLowerCase() === "none" ? "No" : ""),
   },
   {
     id: "previous-employment",

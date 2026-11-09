@@ -166,13 +166,23 @@ test('asked as prose, who you know is left to a person rather than answered "No"
 test('a question the profile genuinely cannot support still stops the application',()=>{
  for(const label of [
   'Do you currently hold an active Top Secret security clearance?',
-  'Have you ever been convicted of a felony?',
   'Do you currently hold or have you previously held any securities industry licenses?',
  ]){
   const resolved=resolveField(yesNo(label),CITIZEN,CONTEXT);
   assert.equal(resolved.outcome,'blocked',label);
   assert.notEqual(resolved.rule,'judgement-default',label);
  }
+ // A conviction question now answers, but only from the applicant's own
+ // standing statement - never from a judgement default, and never with
+ // that statement cleared. Both halves matter: the first is what keeps
+ // the model out of a regulated denial, the second is what the applicant
+ // changes when the answer is not No.
+ const conviction=yesNo('Have you ever been convicted of a felony?');
+ const answered=resolveField(conviction,CITIZEN,CONTEXT);
+ assert.equal(answered.outcome,'fill');
+ assert.equal(answered.rule,'criminal-record');
+ assert.equal(answered.value,'No');
+ assert.equal(resolveField(conviction,{...CITIZEN,criminalRecord:''},CONTEXT).outcome,'blocked');
 });
 
 test('an ordinary yes/no nothing names is still asked, not denied by default',()=>{

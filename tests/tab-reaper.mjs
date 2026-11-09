@@ -88,6 +88,32 @@ await test("a captcha tab is never closed - not idle, not orphaned, not over bud
   }
 });
 
+await test("with nobody there to solve it, a puzzle tab is reaped like any other abandoned tab", () => {
+  // The spare exists for the click only a person can make. An unattended
+  // run never gets that click, so keepCaptcha:false drops the puzzle tab
+  // to the ordinary rules rather than keeping a window of finished forms
+  // nobody will finish. The answers are in the folder either way.
+  const idle = { purpose: "captcha", generation: "a-dead-run", usedAt: NOW - 10 * 60 * MINUTE };
+  const said = tabVerdict({ tab: tab({ lastAccessed: NOW - 10 * 60 * MINUTE }), lease: lease(idle), context: { generation: "this-run", keepCaptcha: false }, now: NOW });
+  assert.equal(said.close, true);
+
+  // Dropping to the ordinary rules is the whole of it: every reason that
+  // protects any other tab still protects this one. A person at the
+  // machine gets the idle window to notice the puzzle, and a run still
+  // holding the tab is never interrupted.
+  const spared = [
+    [{ lastAccessed: NOW - 10 * 60 * MINUTE }, { ...idle, generation: "this-run" }, /still holds it/],
+    [{ lastAccessed: NOW - 30 * 1000 }, idle, /a moment ago/],
+    [{ lastAccessed: NOW - 10 * 60 * MINUTE, pinned: true }, idle, /pinned/],
+    [{ lastAccessed: NOW - 10 * 60 * MINUTE }, { ...idle, usedAt: NOW - 30 * 1000 }, /too recently/],
+  ];
+  for (const [patch, held, reason] of spared) {
+    const kept = tabVerdict({ tab: tab(patch), lease: lease(held), context: { generation: "this-run", keepCaptcha: false }, now: NOW });
+    assert.equal(kept.close, false, JSON.stringify(held));
+    assert.match(kept.reason, reason);
+  }
+});
+
 await test("an attempt parked on an emailed security code keeps both its tabs", () => {
   // The slot is handed back while the mailbox is polled, so from outside
   // nothing is happening on either tab for minutes at a time. What says

@@ -80,6 +80,36 @@ export const DEFAULT_PROFILE = {
   // the names would hand an imported "Old default" straight to a real
   // employer's education block.
   educationSchool: '', educationDegree: '', educationStart: '', educationEnd: '',
+  // Whether a job tab the bot could not finish is left on screen.
+  //
+  // Off, and a posting that cannot be submitted automatically - a
+  // captcha on Submit, a puzzle mid-form - has its answers written to
+  // the folder and its tab closed with everything else. On, the tab
+  // stays so the applicant can make the one click that sends it.
+  //
+  // Off by default because the kept tab only pays when somebody is
+  // there. A supervised run of five is worth five finished forms
+  // waiting to be sent; an unattended night at the daily target is a
+  // window of renderers nobody will ever click, on the same machine
+  // whose disk pressure has killed the browser before. The run log and
+  // the manual-application folder say which postings they were, so the
+  // work is recoverable either way - the live form is not.
+  keepCaptchaTabs: false,
+  // Criminal history, as a standing statement rather than a guess.
+  //
+  // Unlike the blanks above, this one has a default, and the difference
+  // is who is making the statement. A clearance or a licence is granted
+  // by somebody else and a resume says nothing about whether it was; a
+  // criminal record is a fact the applicant holds about themselves and
+  // can state once. The applicant has stated it, so "none" is their
+  // answer and not an invention - which is the whole bar this file sets.
+  //
+  // Set to '' and every conviction question parks for a person again;
+  // set to 'disclose' and it parks with the disclosure left to them,
+  // because a record is never a sentence this system writes. Nothing
+  // here answers a clearance, a licence or a credit check: those are
+  // other people's registers and keep their own rules.
+  criminalRecord: 'none',
   // Professional licences and certifications, or the word "none".
   //
   // Blank on purpose and it costs applications: finance and healthcare
@@ -109,6 +139,8 @@ export const DEFAULT_PROFILE = {
 };
 export const MANUAL_MODES = ['write', 'list', 'ignore'];
 export const GENERIC_FILL_MODES = ['off', 'vendors', 'any'];
+/** No record stated, nothing stated, and a record the applicant will describe themselves. */
+export const CRIMINAL_RECORD = ['none', '', 'disclose'];
 export const APPLY_ENGINES = ['module', 'legacy'];
 export const RESUME_REUSE = ['family', 'posting'];
 export function withDefaults(stored = {}) {
@@ -124,7 +156,13 @@ export function withDefaults(stored = {}) {
   // bottleneck rather than the account.
   value.chatGptConcurrency=Math.max(1,Math.min(4,Math.floor(Number(value.chatGptConcurrency))||1));
   value.maxSubmittedPerRun=Number.isFinite(Number(value.maxSubmittedPerRun))?Math.max(0,Math.floor(Number(value.maxSubmittedPerRun))):0;
-  for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'dryRun', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
+  for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'dryRun', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled','keepCaptchaTabs']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
+  // Anything that is not one of the three answers parks the question
+  // rather than answering it. The unrecognised value here is a settings
+  // export from another build or a hand-edited database, and the shipped
+  // default is the one value that would answer a conviction question on
+  // its own - so a value nobody chose must not be read as that one.
+  if (!CRIMINAL_RECORD.includes(value.criminalRecord)) value.criminalRecord = '';
   value.roleFilterTitles = String(value.roleFilterTitles || '').trim().slice(0, 3000);
   // Remove the password distributed by old builds, including imported settings.
   if (/^Vhkautmd/.test(value.workdayPassword)) value.workdayPassword = '';

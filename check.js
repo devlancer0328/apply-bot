@@ -356,7 +356,10 @@ const unknownLegal = {
   type: "text",
   name: "",
   id: "",
-  label: "Have you ever been convicted of a felony?",
+  // Was the felony question until a rule named it. The backstop is what
+  // is being checked, so this has to stay a question nothing answers:
+  // sensitive enough that the model may not guess, and held by nobody.
+  label: "Have you ever been asked to submit to a polygraph examination?",
   required: true,
   options: [],
 };
@@ -364,6 +367,18 @@ check(
   "a legal question no rule names is refused rather than guessed",
   resolveField(unknownLegal, PROFILE, CONTEXT).outcome === "blocked",
   resolveField(unknownLegal, PROFILE, CONTEXT).outcome,
+);
+
+// And the one it used to be, now that the applicant has stated it once.
+// A conviction question is answered from profile.criminalRecord and from
+// nothing else: clear that statement and it parks exactly as before.
+const conviction = { ...unknownLegal, label: "Have you ever been convicted of a felony?" };
+const stated = resolveField(conviction, PROFILE, CONTEXT);
+check("a stated clean record answers the conviction question", stated.outcome === "fill" && stated.value === "No", JSON.stringify(stated));
+check(
+  "and with nothing stated it goes back to a person",
+  resolveField(conviction, { ...PROFILE, criminalRecord: "" }, CONTEXT).outcome === "blocked",
+  resolveField(conviction, { ...PROFILE, criminalRecord: "" }, CONTEXT).outcome,
 );
 
 // Vercel: "based in any of these countries?" over a dropdown of countries.

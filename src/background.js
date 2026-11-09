@@ -1515,14 +1515,15 @@ async function keepForReview(tabId, application, result) {
 /**
  * Whether the person needs the page itself, not just the folder.
  *
- * A dry run earns it because the filled form is the whole point of one. A
- * captcha earns it for a harder reason: the answers are typed and the form
- * is one human click from being sent, and that click can only be made on
- * the page the puzzle appeared on. Closing it throws away a filled
- * application and leaves the applicant to redo the form from the folder,
- * which is the work the run just did.
+ * A dry run earns it unconditionally, because the filled form is the whole
+ * point of one. A captcha earns it only when `keepCaptchaTabs` says
+ * somebody is there to use it: the answers are typed and the form is one
+ * human click from being sent, but that click can only be made on the page
+ * the puzzle appeared on, and nobody makes it overnight. Either way the
+ * typed answers reach the manual-application folder, so what closing costs
+ * is the live form rather than the work.
  */
-const keptForPerson = (profile, result) => Boolean(profile.dryRun || result?.detail?.captcha);
+const keptForPerson = (profile, result) => Boolean(profile.dryRun || (result?.detail?.captcha && profile.keepCaptchaTabs));
 
 async function finishTab(tabId, application, result, keepOpen) {
   const captureClock=startClock();
@@ -3037,7 +3038,7 @@ async function runInternal() {
   // What is never closed here is in tabs.js, and the captcha tab waiting
   // for a person is first on that list.
   const tabSweep = setInterval(() => {
-    reapTabs({chat:chatTabContext(),reviewBudget:KEPT_TABS}).then(closed=>{
+    reapTabs({chat:chatTabContext(),reviewBudget:KEPT_TABS,keepCaptcha:Boolean(profile.keepCaptchaTabs)}).then(closed=>{
       if(!closed.length)return;
       const kinds=[...new Set(closed.map(entry=>entry.purpose))].join(', ');
       log('info',`Closed ${closed.length} tab(s) nothing was using (${kinds}): ${closed.map(entry=>entry.reason).join('; ')}`);
@@ -3709,7 +3710,7 @@ async function runInternal() {
     // find and close what this one could not - and the next run is the
     // only thing that will, which is why it is said here rather than left
     // to a service worker that may outlive a dozen runs.
-    await releaseOwned().catch(()=>{});
+    await releaseOwned({keepCaptcha:Boolean(profile.keepCaptchaTabs)}).catch(()=>{});
     state.running = false;
     if(state.stopping)state.stopReason=stoppedReason('after the current operations finished');
     state.stopReason ||= {code:'complete',message:'Finished all loaded jobs. No additional feeds are enabled.'};

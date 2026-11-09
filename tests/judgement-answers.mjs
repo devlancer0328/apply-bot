@@ -71,12 +71,77 @@ test('one word from the applicant answers the whole licence class, in each shape
  assert.equal(resolveField(ask('Please list the licenses you hold.'),some,CONTEXT).value,'Series 7, Series 63');
 });
 
-test('a clearance, a conviction and a degree the profile cannot vouch for are never invented',()=>{
+test('a clearance and an identifier the profile cannot vouch for are never invented',()=>{
  for(const label of [
   'Do you currently hold or have you ever held an active US security clearance?',
-  'Have you ever been convicted of a felony?',
   'What is your social security number?',
  ]) assert.equal(resolveField(yesNo(label),PROFILE,CONTEXT).outcome,'blocked',label);
+});
+
+/* ------------------------------------------------- the record, as stated */
+
+test('a stated clean record answers the conviction questions, in each shape they are asked',()=>{
+ // Not a guess off a resume: profile.criminalRecord is the applicant
+ // saying it once, the same trade profile.licenses already makes.
+ for(const label of [
+  'Have you ever been convicted of a felony?',
+  'Have you ever been convicted of a crime?',
+  'Do you have any criminal convictions?',
+  'Have you been convicted of a misdemeanor in the last 7 years?',
+  'Are you currently under indictment?',
+  'Have you ever pleaded guilty or no contest to a criminal offense?',
+ ]){
+  const resolved=resolveField(yesNo(label),PROFILE,CONTEXT);
+  assert.equal(resolved.outcome,'fill',label);
+  assert.equal(resolved.rule,'criminal-record',label);
+  assert.equal(resolved.value,'No',label);
+ }
+});
+
+test('a record the applicant has not spoken for still goes to a person',()=>{
+ // Empty parks it as before, and "disclose" parks it too: a record that
+ // exists is a sentence only the applicant writes.
+ for(const criminalRecord of ['','disclose']){
+  const resolved=resolveField(yesNo('Have you ever been convicted of a felony?'),{...PROFILE,criminalRecord},CONTEXT);
+  assert.equal(resolved.outcome,'blocked',criminalRecord);
+  assert.equal(resolved.rule,'criminal-record',criminalRecord);
+ }
+});
+
+test('the record rule does not reach a clearance, a licence or a background-check consent',()=>{
+ // Each of these keeps its own setting, and a clean record says nothing
+ // about any of them.
+ assert.equal(resolveField(yesNo('Do you consent to a criminal background check?'),PROFILE,CONTEXT).rule,'background-check');
+ assert.equal(resolveField(yesNo('Do you currently hold an active security clearance?'),PROFILE,CONTEXT).outcome,'blocked');
+ assert.equal(resolveField(yesNo('Do you hold any securities industry licenses?'),PROFILE,CONTEXT).rule,'licenses');
+});
+
+/* -------------------------------------- nobody this applicant knows works there */
+
+test('a conflict screen about the household is denied however it names the household',()=>{
+ // The employee-worded ones already answered; these name only a relative
+ // and the company, which reached no rule and parked finished forms.
+ for(const label of [
+  'Do you have any relatives who work at Clear Street?',
+  'Do you have relatives employed by this company?',
+  'Do you have any relatives at this company?',
+  'Is your spouse or domestic partner employed by Clear Street?',
+  'Do you have a family member working here?',
+  'Do you have any friends or family at the company?',
+  'Has any member of your household ever worked for us?',
+  'Are you a relative of a current or former employee?',
+ ]){
+  const resolved=resolveField(yesNo(label),PROFILE,CONTEXT);
+  assert.equal(resolved.outcome,'fill',label);
+  assert.equal(resolved.value,'No',label);
+ }
+});
+
+test('the household rule does not swallow the channel question or the applicant\'s own history',()=>{
+ assert.equal(resolveField({...ask('How did you hear about this opportunity?'),type:'select',options:[{label:'Company website',value:'1'},{label:'LinkedIn',value:'2'}]},PROFILE,CONTEXT).value,'1');
+ // "Have you worked here before" is about the applicant, not a relative,
+ // and keeps its own rule and its own evidence.
+ assert.equal(resolveField(yesNo('Have you ever worked for this company before?'),PROFILE,CONTEXT).rule,'previous-employment');
 });
 
 test("a driving licence is not a credential this answers, so it still goes to a person",()=>{

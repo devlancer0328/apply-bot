@@ -297,10 +297,11 @@ export async function hold(tabId, purpose) {
  * behind keeps its claim: that is the whole of the review and captcha
  * purposes, and they are what the person is meant to find in the morning.
  */
-export async function releaseOwned() {
+export async function releaseOwned({ keepCaptcha = true } = {}) {
   const map = await ledger();
+  const kept = keepCaptcha ? ["captcha", "review"] : ["review"];
   for (const [tabId, lease] of map) {
-    if (["captcha", "review"].includes(lease.purpose)) continue;
+    if (kept.includes(lease.purpose)) continue;
     map.set(tabId, { ...lease, generation: "" });
   }
   await persist();
@@ -335,7 +336,16 @@ export function tabVerdict({ tab, lease, context = {}, now = Date.now() }) {
   // The person's own tabs. Not a heuristic and not overridable: if this
   // bot did not open it and write it down, it is not ours to close.
   if (!lease) return { close: false, reason: "not a tab this bot opened" };
-  if (lease.purpose === "captcha") return { close: false, reason: "a puzzle is waiting for a person" };
+  // A puzzle tab holds a filled form one human click from being sent, so
+  // it outranks every other reason to keep a tab - but only while
+  // somebody is going to make that click. Unattended, the click never
+  // comes and the window fills with finished forms nobody will finish,
+  // which is why `keepCaptcha` is a setting and not a constant. Off, the
+  // tab falls through to the ordinary idle rules below rather than being
+  // closed on the spot: the answers are already saved to the folder, and
+  // a person who is at the machine still gets the idle window to notice
+  // the puzzle and solve it.
+  if (lease.purpose === "captcha" && context.keepCaptcha !== false) return { close: false, reason: "a puzzle is waiting for a person" };
   // Three things only a person does with a tab, and one thing only a
   // person causes. A tab they pinned, a tab making noise, the tab they
   // are looking at, and a tab they were on a moment ago are all in use

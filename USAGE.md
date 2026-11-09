@@ -168,6 +168,7 @@ filter uses **Save role filter**, and the optional filters use **Save filters**.
 | **When the bot cannot submit** | Save the link | What to do with unsupported sites that still reach the run: *Save the link for later*, *Prepare documents for a manual application*, or *Skip the link*. |
 | **Let the generic filler drive sites with no adapter** | Off | *Only hiring systems it has been checked against* or *Any site whose form it recognises*. The generic filler refuses password pages, ambiguous Submit buttons, empty required fields and visible captchas — **but it cannot refuse being wrong about a form it read badly, and a sent application cannot be recalled.** Leave off unless somebody is watching. |
 | **Manual document limit per run** | 10 | Caps how many manual-application document sets are prepared per run. `0` means unlimited. |
+| **Keep a tab open when a captcha blocks Submit** | Off | The form is filled and one click from being sent, but only on that page. **On**, the tab waits for you. **Off**, the typed answers are written to the manual-application folder and the tab is closed with the rest — which is what an unattended run wants, since nobody is there to make the click. |
 
 ### Settings → Documents and speed
 
@@ -231,6 +232,14 @@ holder, Needs sponsorship), **Requires sponsorship**, **Age 18 or older**, **Sub
 to a non-compete**, **Consent to background check**, **Previously employed
 (fallback)**, and **Previous employers** (one per line; otherwise the resume
 generated for that application is used).
+
+**Criminal record** sits in the same card and defaults to **No record**, which
+answers conviction, felony, misdemeanour and criminal-history questions with "No".
+This is your own standing statement, not a guess the bot makes from your resume —
+which is why it is a setting rather than a built-in assumption. Set it to *Leave
+conviction questions to me* or *I have one* and every such question goes back to a
+person instead. It never answers a security clearance, a professional licence, or
+consent to a background check; those keep their own settings above.
 
 **Standing answers** — your own answers to questions the bot would otherwise have
 to hold.
@@ -327,11 +336,16 @@ run to apply them.
 
 **Stop switches autopilot off.** Every time. Re-enable it in *Unattended day*.
 
-**Held tabs are deliberate.** A captcha tab is left open on purpose so you can
-solve it where it appeared. So are applications asking something your profile
-cannot honestly answer. They are filled in and waiting — you only need to answer
-the one question and submit. Adding that answer to **Standing answers** stops it
-recurring.
+**Captcha tabs are closed by default.** A filled form behind a puzzle is one human
+click from being sent, but only on that page — and overnight nobody makes that
+click, so the window fills with forms nobody will finish. The typed answers are
+written to the manual-application folder either way, so what closing costs is the
+live form rather than the work. If you are sitting with the run, turn on **Keep a
+tab open when a captcha blocks Submit** and they will wait for you.
+
+**Questions your profile cannot answer still hold.** Those applications are filled
+in and waiting — you only need to answer the one question and submit. Adding that
+answer to **Standing answers** stops it recurring.
 
 **300 a day needs 300 postings a day.** The ceiling is usually supply, not speed. A
 single application takes roughly 90 seconds. If the funnel shows thousands found
