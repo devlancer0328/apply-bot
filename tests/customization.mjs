@@ -18,9 +18,13 @@ await test('Retired career and prompt settings cannot reappear through old impor
   for (const key of ['experience','degree','school','companySize','companyDescriptions','formatPrompt','tailoringInstructions']) assert.equal(key in value,false);
   assert.equal(value.firstName,'Alex'); assert.equal(value.workdayPassword,'');
   // An import that says nothing about these gets the shipped defaults,
-  // which submit rather than park: a machine left in review mode applied
-  // to nothing for seven hours and reported itself healthy throughout.
-  assert.equal(value.dryRun,false); assert.equal(value.autoFetch,true); assert.equal(value.maxPerRun,0);
+  // which submit rather than park.
+  assert.equal(value.autoFetch,true); assert.equal(value.maxPerRun,0);
+  // Review mode is gone outright, not defaulted off: a machine left in it
+  // applied to nothing for seven hours and reported itself healthy
+  // throughout. An import still carrying the old key does not revive it.
+  assert.equal('dryRun' in value,false);
+  assert.equal('dryRun' in withDefaults({firstName:'Alex',lastName:'Morgan',email:'a@b.test',dryRun:true}),false);
 });
 await test('Generation has no local resume or salary setting prerequisite',()=>{
   const profile = withDefaults({firstName:'Alex',lastName:'Morgan',email:'alex@example.test',phone:'555',city:'Seattle',startDate:'Two weeks',workAuthorization:'us-citizen',requiresSponsorship:'no',activeResumeId:'retired',salaryFallback:999999});

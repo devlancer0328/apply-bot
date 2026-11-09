@@ -4,14 +4,15 @@ import initSqlJs from "./vendor/sqlite.js";
 import { bytesToBase64, base64ToBytes, pack } from "./codec.js";
 import { historyIndex, historyUrls, jobIdentityKeys, previewHistory } from './history.js';
 import {companyKey,companyResolved,roleKey} from './companies.js';
+import {questionKey,recordQuestion,answerQuestion} from './question-pack.js';
 const LEGACY_TABLES = ["applications", "results", "resumes", "templates", "files"];
-const TABLES = new Set([...LEGACY_TABLES, 'history','jobs']);
+const TABLES = new Set([...LEGACY_TABLES, 'history','jobs','questions']);
 const FILE = "apply-bot.sqlite3";
 let connection, engine, directory, ready, queue = Promise.resolve();
 function schema(db) {
   db.run("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, json TEXT NOT NULL)");
   for (const table of TABLES) db.run(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json TEXT NOT NULL, updated_at INTEGER NOT NULL)`);
-  db.run("PRAGMA user_version = 6");
+  db.run("PRAGMA user_version = 7");
 }
 function rows(sql, args = []) {
   const statement = connection.prepare(sql);
@@ -207,6 +208,31 @@ export function databaseRequest(request) {
           if (!held || held.kind !== 'submission') { connection.run('ROLLBACK'); inTransaction = false; return {released:false}; }
           connection.run('DELETE FROM history WHERE id = ?',[`submission:${key}`]);
           released = true;
+        } else if (action === 'questionAsk') {
+          // Read, merge, write, inside the one transaction. Two attempts
+          // parking on the same question in the same second is ordinary
+          // at this concurrency, and a read-modify-write split across
+          // them would lose a count or, worse, an answer typed between
+          // the read and the write.
+          for (const sighting of Array.isArray(value) ? value : [value]) {
+            const key = questionKey(sighting?.question, sighting?.company);
+            if (!key) continue;
+            const existing = rows('SELECT json FROM questions WHERE id = ?', [key]).map(r => JSON.parse(r.json))[0];
+            const merged = recordQuestion(existing ? { [key]: existing } : {}, sighting);
+            put('questions', { ...merged[key], id: key });
+          }
+        } else if (action === 'questionAnswer') {
+          const key = String(value?.key ?? '');
+          const row = rows('SELECT json FROM questions WHERE id = ?', [key]).map(r => JSON.parse(r.json))[0];
+          if (!row) throw new Error('That question is no longer in the pack.');
+          put('questions', { ...answerQuestion({ [key]: row }, key, value?.answer)[key], id: key });
+        } else if (action === 'questionUsed') {
+          // Said after a form was actually filled from the pack, so the
+          // page can show which answers are earning their place.
+          for (const key of (Array.isArray(value) ? value : [value]).map(String)) {
+            const row = rows('SELECT json FROM questions WHERE id = ?', [key]).map(r => JSON.parse(r.json))[0];
+            if (row) put('questions', { ...row, usedCount: (row.usedCount ?? 0) + 1, lastUsedAt: Date.now() });
+          }
         } else if (action === "replace") { connection.run(`DELETE FROM ${table}`); for (const row of value) put(table, row); }
         else if (action === "delete") connection.run(`DELETE FROM ${table} WHERE id = ?`, [String(id)]);
         else if (action === "kvSet") for (const [key, item] of Object.entries(value)) writeSetting(key, item);

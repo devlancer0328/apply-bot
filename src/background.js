@@ -46,7 +46,7 @@ import {employerDay} from './employers.js';
 import {harvestBoards,relevantPostings,rosterSeeds} from './boards.js';
 import {roleAllowed,roleFilterActive,roleRejection,roleTerms} from './roles.js';
 import { createSlots } from "./slots.js";
-import { allLinks, allPairings, allResults, allHistory, claimSubmission, forgetKeys, readProfile, recordResult, releaseSubmission, toBase64 } from "./store.js";
+import { allLinks, allPairings, allResults, allHistory, answerPack, askedQuestions, claimSubmission, forgetKeys, readProfile, recordResult, releaseSubmission, toBase64, usedAnswers } from "./store.js";
 import { suppliedApplication } from "./pairings.js";
 
 // Nothing here uses a key any more; one an earlier version saved is dropped.
@@ -896,8 +896,47 @@ async function keepOtherLinks(manual, at = Date.now()) {
 /* ------------------------------------------------------------- one job */
 
 /** The facts a form's open questions are answered from: the posting, the documents written for it, the person. */
+/**
+ * The answered questions, held for the length of a run.
+ *
+ * Read once at the top of a run rather than per application: the pack is
+ * small, it only changes when a person answers something on the Questions
+ * page, and a database read per form is a read per form. An answer typed
+ * mid-run reaches the next run, which is the same bargain every other
+ * setting here makes.
+ */
+let runAnswerPack = {};
+
+/**
+ * A question nothing could answer, written down against the form it came
+ * off so the applicant can answer it once on the Questions page.
+ *
+ * Never allowed to be the reason an application fails. The attempt is
+ * already parking when this runs, and a failed write here would turn a
+ * recoverable park into a lost one for the sake of bookkeeping.
+ */
+async function rememberQuestions(application, entries) {
+  const sightings = (entries ?? [])
+    .filter((entry) => String(entry?.question ?? "").trim())
+    .map((entry) => ({
+      question: entry.question,
+      company: application?.company ?? "",
+      url: application?.applyUrl || application?.sourceUrl || "",
+      required: entry.required !== false,
+      options: (entry.options ?? []).map((option) => (typeof option === "string" ? option : option?.label ?? option?.value ?? "")).filter(Boolean).slice(0, 40),
+      type: entry.type ?? "",
+      reason: entry.reason ?? "",
+    }));
+  if (!sightings.length) return;
+  await askedQuestions(sightings).catch((error) => log("warn", `could not save ${sightings.length} unanswered question(s) for review: ${error.message}`));
+  log("info", `${application?.company ?? "This application"} - ${sightings.length} question(s) saved to Questions for you to answer once: ${sightings.map((entry) => `"${String(entry.question).slice(0, 60)}"`).join(", ")}`);
+}
+
 function answerContext(application, profile) {
   return {
+    // What the applicant has already answered, so a question that parked
+    // an application last night fills a form tonight.
+    answerPack: runAnswerPack,
     company: application.company,
     title: application.title,
     jd: application.jd,
@@ -1094,7 +1133,10 @@ async function runOne(application, profile, attempt = soloAttempt) {
     const demographicBlock = plan.blocked.find(b=>isDemographicQuestion(b.label));
     if (demographicBlock) return handoff(`A required demographic answer needs profile review: ${demographicBlock.reason}`);
 
-    if(plan.blocked.length)return handoff('Required candidate information needs review: '+plan.blocked.map(entry=>entry.reason).join('; '));
+    if(plan.blocked.length){
+      await rememberQuestions(application,plan.blocked.map(entry=>({question:entry.label,reason:entry.reason,required:true,options:entry.options??[],type:entry.type??''})));
+      return handoff('Required candidate information needs review: '+plan.blocked.map(entry=>entry.reason).join('; '));
+    }
 
     if (plan.questions.length > 0) {
       // A menu that only renders when opened has no options in the
@@ -1114,7 +1156,10 @@ async function runOne(application, profile, attempt = soloAttempt) {
       const { answers, unanswered, forced } = await answerAll(plan.questions, context, profile);
       const fitted=fittedAnswers(answers,unanswered,plan.questions,inventory.fields);
       const requiredUnknown=unanswered.filter(question=>question.required);
-      if(requiredUnknown.length)return handoff('Required candidate answers are not supported by saved facts: '+requiredUnknown.map(question=>question.question).join('; '));
+      if(requiredUnknown.length){
+        await rememberQuestions(application,requiredUnknown.map(question=>({question:question.question,required:true,options:plan.questions.find(entry=>entry.key===question.key)?.options??[],reason:'no saved fact supports an answer'})));
+        return handoff('Required candidate answers are not supported by saved facts: '+requiredUnknown.map(question=>question.question).join('; '));
+      }
       log("info", `${application.company} - answered in ${since(askedAt)} (model: ${sinceSpend(before)})`);
       plan.fills.push(...fitted);
       if (forced.length > 0) {
@@ -1214,15 +1259,6 @@ async function runOne(application, profile, attempt = soloAttempt) {
     const requiredDemographic = demographics.failed.find(field=>field.required);
     if (requiredDemographic) return handoff(`A required demographic answer needs profile review: ${requiredDemographic.label}`);
     verified = await inFrame(tabId, frameId, () => window.__ghApply.verify());
-
-    if (profile.dryRun) {
-      return finish("dry-run", "filled and verified, left open for you to look at", {
-        filled: applied?.applied?.length ?? 0,
-        attachments: attachments.length,
-        questions: plan.questions.length,
-        empty: verified?.empty ?? [],
-      });
-    }
 
     // Lever is never sent. Its Submit sits behind an hCaptcha that, from a
     // datacenter address, is the picture puzzle only a person can click
@@ -1468,7 +1504,7 @@ function moduleServices(application, profile, context, attempt, onFatal) {
  * documents that earned it.
  */
 async function keepLastPage(application, profile, outcome, picture) {
-  const root = profile.dryRun ? "review" : [OUTCOMES.CONFIRMED, OUTCOMES.UNCERTAIN].includes(outcome.status) ? "applied" : MANUAL_ROOT;
+  const root = [OUTCOMES.CONFIRMED, OUTCOMES.UNCERTAIN].includes(outcome.status) ? "applied" : MANUAL_ROOT;
   const folder = applicationFolder(application, root);
   // Five sixths of what an application costs on disk is this one PNG, so
   // it is the first thing dropped when there is no room left. The folder
@@ -1515,15 +1551,14 @@ async function keepForReview(tabId, application, result) {
 /**
  * Whether the person needs the page itself, not just the folder.
  *
- * A dry run earns it unconditionally, because the filled form is the whole
- * point of one. A captcha earns it only when `keepCaptchaTabs` says
- * somebody is there to use it: the answers are typed and the form is one
- * human click from being sent, but that click can only be made on the page
- * the puzzle appeared on, and nobody makes it overnight. Either way the
- * typed answers reach the manual-application folder, so what closing costs
- * is the live form rather than the work.
+ * A captcha earns it only when `keepCaptchaTabs` says somebody is there to
+ * use it: the answers are typed and the form is one human click from being
+ * sent, but that click can only be made on the page the puzzle appeared
+ * on, and nobody makes it overnight. Either way the typed answers reach
+ * the manual-application folder, so what closing costs is the live form
+ * rather than the work.
  */
-const keptForPerson = (profile, result) => Boolean(profile.dryRun || (result?.detail?.captcha && profile.keepCaptchaTabs));
+const keptForPerson = (profile, result) => Boolean(result?.detail?.captcha && profile.keepCaptchaTabs);
 
 async function finishTab(tabId, application, result, keepOpen) {
   const captureClock=startClock();
@@ -1667,7 +1702,10 @@ async function runWorkday(application, profile, context, { finish, archived, get
     if (plan.blocked.some(b=>b.rule === 'salary-research')) return {handoff:'Compensation research is unavailable or uncited; no salary fallback was used.'};
     const demographicBlock = plan.blocked.find(b=>isDemographicQuestion(b.label));
     if (demographicBlock) return {handoff:`A required demographic answer needs profile review: ${demographicBlock.reason}`};
-    if(plan.blocked.length)return {handoff:'Required candidate information needs review: '+plan.blocked.map(entry=>entry.reason).join('; ')};
+    if(plan.blocked.length){
+      await rememberQuestions(application,plan.blocked.map(entry=>({question:entry.label,reason:entry.reason,required:true,options:entry.options??[],type:entry.type??''})));
+      return {handoff:'Required candidate information needs review: '+plan.blocked.map(entry=>entry.reason).join('; ')};
+    }
 
     if (plan.questions.length > 0) {
       for (const question of plan.questions) {
@@ -1681,7 +1719,10 @@ async function runWorkday(application, profile, context, { finish, archived, get
       const { answers: modelAnswers, forced,unanswered } = await answerAll(plan.questions, context, profile);
       const fitted=fittedAnswers(modelAnswers,unanswered,plan.questions,fields);
       const requiredUnknown=unanswered.filter(question=>question.required);
-      if(requiredUnknown.length)return {handoff:'Required candidate answers are not supported by saved facts: '+requiredUnknown.map(question=>question.question).join('; ')};
+      if(requiredUnknown.length){
+        await rememberQuestions(application,requiredUnknown.map(question=>({question:question.question,required:true,options:plan.questions.find(entry=>entry.key===question.key)?.options??[],reason:'no saved fact supports an answer'})));
+        return {handoff:'Required candidate answers are not supported by saved facts: '+requiredUnknown.map(question=>question.question).join('; ')};
+      }
       log("info", `${label} - ${state.step || state.kind}: answered ${plan.questions.length} open question(s) in ${since(askedAt)} (model: ${sinceSpend(before)})`);
       plan.fills.push(...fitted);
       if (forced.length > 0) log("warn", `${label} - ${forced.length} required question(s) answered on the model's best judgement`, forced);
@@ -1925,9 +1966,6 @@ async function runWorkday(application, profile, context, { finish, archived, get
 
         case "review": {
           await rememberAccount();
-          if (profile.dryRun) {
-            return finish("dry-run", "every page filled; the review page is left open for you to look at", { filled: answers.length, questions: answers.length });
-          }
           const [baseline]=await chrome.scripting.executeScript({target:{tabId},func:confirmationSnapshot});
           confirmationBefore=baseline?.result||[];
           const claim = await claimSubmission(application);
@@ -2878,6 +2916,15 @@ async function runInternal() {
   await loadSchedule();
   await loadDay();
   await loadHealth().catch(()=>{});
+  // The answers given on the Questions page since the last run. Read here
+  // for the same reason as the schedule: what a run uses is what was
+  // saved before it started, and a pack that failed to load must leave
+  // the questions unanswered rather than carry a stale one into a form.
+  runAnswerPack = await answerPack().catch(() => ({}));
+  {
+    const waiting = Object.keys(runAnswerPack).length;
+    if (waiting) log("info", `${waiting} answered question(s) loaded; forms asking them again are filled rather than held`);
+  }
   // Before a tab is opened rather than after the first application has
   // been written: a disk with no room left cannot record what was sent,
   // and an application nobody has a receipt for is worse than one not
@@ -2889,7 +2936,6 @@ async function runInternal() {
   const today=dayProgress(dailyLedger,scheduleSettings);
   if(today.met){state.stopReason={code:'target',message:`Today's target of ${today.target} confirmed submission(s) is already met at ${today.submitted}. Raise the daily target in Settings, or wait for midnight.`};log('info',state.stopReason.message);remember();return;}
   state.targetSubmitted=profile.maxSubmittedPerRun||0;
-  if(profile.dryRun&&state.targetSubmitted){state.stopReason={code:'setup',message:'A confirmed-submission target requires automatic submission. Turn off Review before sending or set the target to 0.'};remember();return;}
   const gaps = missingFromProfile(profile);
   if (gaps.length > 0) {
     state.stopReason={code:'setup',message:`Complete your profile: ${gaps.join('; ')}.`};remember();
@@ -3060,12 +3106,7 @@ async function runInternal() {
 
   const SOURCE_NAMES = {jobright:"Jobright",hiringcafe:"Hiring Cafe",boards:"the job boards of employers already seen"};
   const rotation = sources.map((name) => SOURCE_NAMES[name] || name).join(" and ");
-  log(
-    "info",
-    profile.dryRun
-      ? `Dry run - every form is filled and left open, nothing is sent.`
-      : `Live - applications will be sent.`,
-  );
+  log("info", `Live - applications will be sent.`);
   log("info", scheduleSettings.dailyTarget > 0
     ? `Today: ${today.submitted} of ${scheduleSettings.dailyTarget} sent, ${Math.round(today.needed * 10) / 10} an hour needed for the rest of the day. ${scheduleSettings.attemptConcurrency} application(s) at a time, ${Math.round(scheduleSettings.boardGapMs / 1000)}s between applications on one board, ${Math.round(scheduleSettings.attemptDeadlineMs / 60000)} minutes before an attempt is abandoned.`
     : `No daily target set; ${scheduleSettings.attemptConcurrency} application(s) at a time.`);

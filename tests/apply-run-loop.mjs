@@ -75,7 +75,7 @@ const PROFILE = withDefaults({
   firstName: "Daniel", lastName: "Torres", email: "someone@example.test", phone: "+1 (929) 489-1252",
   city: "Temple", state: "TX", country: "United States", linkedin: "https://linkedin.com/danieltorres8483",
   workAuthorization: "us-citizen", requiresSponsorship: "no", nonCompete: "no", over18: "yes",
-  startDate: "Two weeks from offer", dryRun: false,
+  startDate: "Two weeks from offer",
 });
 
 const bytes = (text) => new Uint8Array([...text].map((character) => character.charCodeAt(0)));
@@ -255,7 +255,7 @@ const applicationFor = (company, slug, extra = {}) => ({
  * being tested is that they still work when the word `submitted` is
  * produced somewhere new.
  */
-function createRun({ perCompanyPerDay = 1, attemptConcurrency = 1, profile = PROFILE } = {}) {
+function createRun({ perCompanyPerDay = 1, attemptConcurrency = 1, profile = PROFILE, policy = {} } = {}) {
   const schedule = withScheduleDefaults({ dailyTarget: 10, perCompanyPerDay, attemptConcurrency, employerGapMs: 0 });
   const employers = employerDay({ limit: schedule.perCompanyPerDay, gapMs: schedule.employerGapMs });
   const slots = createSlots({ limit: schedule.attemptConcurrency });
@@ -287,7 +287,7 @@ function createRun({ perCompanyPerDay = 1, attemptConcurrency = 1, profile = PRO
           return { code: job.code ?? "A1B2C3D4" };
         }),
         evidence: async ({ outcome, picture }) => {
-          const root = profile.dryRun ? "review" : [OUTCOMES.CONFIRMED, OUTCOMES.UNCERTAIN].includes(outcome.status) ? "applied" : MANUAL_ROOT;
+          const root = [OUTCOMES.CONFIRMED, OUTCOMES.UNCERTAIN].includes(outcome.status) ? "applied" : MANUAL_ROOT;
           const folder = applicationFolder(application, root);
           folders.push({ folder, url: picture.url });
           return { path: `${folder}/Last page.png`, folder };
@@ -507,22 +507,26 @@ await test("A captcha hands the form over with its answers, and does not protect
   assert.equal(run.ledger.failed, 1);
 });
 
-/* -------------------------------------------------------------- dry runs */
+/* ------------------------------------------------- no fill-only mode left */
 
-await test("A review run fills the form, leaves the page, and records nothing as sent", async () => {
+await test("No stored setting can turn a run into one that fills without sending", async () => {
+  // There used to be a "Review before sending" switch, stored as
+  // `dryRun`, which filled every form and submitted none. One machine
+  // was left in it and ran a whole night for nothing, so the setting is
+  // gone rather than defaulted off. The key is stripped on read, which
+  // is what makes it harmless on a profile that still has it saved.
+  const stale = withDefaults({ ...PROFILE, dryRun: true });
+  assert.ok(!("dryRun" in stale));
+
   const tab = tabOver(FORM(), URL_OF("ramp"), { onSubmit: (press, document) => { if (press === 1) document.body.innerHTML = THANKS; } });
-  const run = createRun({ profile: withDefaults({ ...PROFILE, dryRun: true }) });
+  const run = createRun({ profile: stale });
   const application = applicationFor("Ramp", "ramp");
   const result = await run.apply({ application, tab });
 
-  assert.equal(result.status, "dry-run");
-  assert.match(result.reason, /filled and verified/);
-  assert.equal(result.keepOpen, true, "a filled form that vanishes cannot be looked at");
-  assert.equal(result.archive, null);
-  assert.equal(tab.state.submits, 0);
-  assert.equal(tab.state.closed, undefined, "the tab was closed on a review run");
-  assert.equal(run.folders[0].folder, applicationFolder(application, "review"));
-  assert.equal(run.ledger.submitted, 0);
+  assert.equal(result.status, "submitted");
+  assert.equal(tab.state.submits, 1);
+  assert.equal(run.ledger.submitted, 1);
+  assert.equal(run.folders[0].folder, applicationFolder(application, "applied"));
 });
 
 /* ---------------------------------------- what the form turned out to want */

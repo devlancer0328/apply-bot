@@ -25,6 +25,17 @@ export const allJobs = () => db({action:'list',table:'jobs'});
 export const getJob = id => db({action:'get',table:'jobs',id});
 export const saveJob = value => db({action:'put',table:'jobs',value:{...value,updatedAt:Date.now()}});
 export const allHistory = () => db({action:'list',table:'history'});
+/* The questions nobody could answer, and the answers given since. */
+export const allQuestions = () => db({action:'list',table:'questions'});
+export const askedQuestions = sightings => db({action:'questionAsk',value:sightings});
+export const answerAsked = (key,answer) => db({action:'questionAnswer',value:{key,answer}});
+export const usedAnswers = keys => db({action:'questionUsed',value:keys});
+export const forgetQuestion = id => db({action:'delete',table:'questions',id});
+/** The pack as the answer rules want it: keyed by question, answered entries only. */
+export async function answerPack() {
+  const rows = await allQuestions().catch(() => []);
+  return Object.fromEntries(rows.filter(row => String(row?.answer ?? '').trim()).map(row => [row.id ?? row.key, row]));
+}
 export const importHistory = rows => db({action:'historyImport',value:rows});
 export const deleteHistory = id => db({action:'delete',table:'history',id});
 export const setHistoryCompany = (id,company,aliases=[]) => db({action:'historyCompany',value:{id,company,aliases}});

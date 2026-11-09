@@ -74,13 +74,8 @@ async function refresh() {
       : `${parts.join("; ")}.`;
 
   $("mode").hidden = false;
-  if (profile.dryRun) {
-    $("mode").className = "status";
-    $("mode").textContent = "Review mode: forms are filled and left open before final submission.";
-  } else {
-    $("mode").className = "status error";
-    $("mode").textContent = "Automatic submission is enabled.";
-  }
+  $("mode").className = "status error";
+  $("mode").textContent = "Automatic submission is enabled.";
 
   const missing = missingFromProfile(profile);
   canRun = missing.length === 0 && unresolved.length === 0 && (waiting > 0 || sources.length > 0);
@@ -120,13 +115,10 @@ function poll() {
 /* ---------------------------------------------------------------- actions */
 
 $("run").addEventListener("click", async () => {
-  const profile = await readProfile();
-  if (!profile.dryRun) {
-    const ok = confirm(
-      "Automatic submission is enabled. Submit applications from your loaded links and enabled feeds?",
-    );
-    if (!ok) return;
-  }
+  const ok = confirm(
+    "Automatic submission is enabled. Submit applications from your loaded links and enabled feeds?",
+  );
+  if (!ok) return;
   $("log").innerHTML = "";
   await chrome.runtime.sendMessage({ type: "run" });
   setRunning(true, 0, 0);

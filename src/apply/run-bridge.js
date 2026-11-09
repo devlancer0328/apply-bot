@@ -122,11 +122,14 @@ export async function applyThroughModule({ application, profile, context, policy
     // writes the fresh compensation research into it in place, and the
     // engine reads the same object when it plans the form.
     answerContext: context,
-    // `keepOpen` is left unset outside a dry run rather than set to false,
-    // because the engine's own default keeps a `challenge` page open and an
-    // explicit false overrides it - which silently closed every captcha the
-    // run filled, since `??` treats false as an answer and undefined as none.
-    policy: { review: Boolean(profile.dryRun), register: Boolean(profile.allowAccountRegistration), ...(profile.dryRun ? { keepOpen: true } : {}), ...policy },
+    // `review` fills every form and submits none. No setting turns it on
+    // any more - it is reachable only from the fixtures that check the
+    // engine stops short of Submit. `keepOpen` is left unset rather than
+    // set to false, because the engine's own default keeps a `challenge`
+    // page open and an explicit false overrides it - which silently closed
+    // every captcha the run filled, since `??` treats false as an answer
+    // and undefined as none.
+    policy: { review: false, register: Boolean(profile.allowAccountRegistration), ...policy },
   };
 
   // Two facts the outcome does not carry and the run needs. "Rejected"

@@ -171,7 +171,7 @@ export const DEFAULT_PROFILE = {
   // `requiredProfileFields`, enforced in src/options.js) - so the person
   // who has not set this up cannot submit, whatever these say, and the
   // person who has set it up meant to.
-  dryRun: false, delayMs: 2000, maxPerRun: 0, maxSubmittedPerRun:0, foregroundTabs: true,
+  delayMs: 2000, maxPerRun: 0, maxSubmittedPerRun:0, foregroundTabs: true,
   exportFiles: false, generateOptionalLetters:false,
 };
 export const MANUAL_MODES = ['write', 'list', 'ignore'];
@@ -193,7 +193,13 @@ export function withDefaults(stored = {}) {
   // bottleneck rather than the account.
   value.chatGptConcurrency=Math.max(1,Math.min(4,Math.floor(Number(value.chatGptConcurrency))||1));
   value.maxSubmittedPerRun=Number.isFinite(Number(value.maxSubmittedPerRun))?Math.max(0,Math.floor(Number(value.maxSubmittedPerRun))):0;
-  for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'dryRun', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled','keepCaptchaTabs']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
+  for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled','keepCaptchaTabs']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
+  // "Review before sending" used to live here as `dryRun`, filling every
+  // form and submitting none. It is gone rather than defaulted off: a
+  // machine left in it ran a full night and sent nothing, and a setting
+  // whose only failure mode is silence is not worth keeping. Anything
+  // still stored under the old key is ignored.
+  delete value.dryRun;
   // Anything that is not one of the three answers parks the question
   // rather than answering it. The unrecognised value here is a settings
   // export from another build or a hand-edited database, and the shipped

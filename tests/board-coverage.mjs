@@ -16,8 +16,9 @@
  *
  * It also pins the captcha tab rule. A filled form behind a puzzle is one
  * human click from being sent and that click can only happen on the page,
- * so the tab must stay open; it was being closed because `keepOpen` was
- * tied to `dryRun`, which is false on every real run.
+ * so the tab must stay open when somebody is there to click; it was being
+ * closed because `keepOpen` was tied to the old review setting, which was
+ * off on every real run.
  */
 
 import assert from "node:assert/strict";

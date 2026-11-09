@@ -63,7 +63,7 @@ try {
   const blanks = Object.keys(stored).filter((key) => empty(stored[key])).sort();
 
   console.log("RUN SETTINGS");
-  for (const key of ["dryRun", "maxPerRun", "maxSubmittedPerRun", "exportFiles", "autoFetch", "jobrightRecommend", "hiringCafeUrl", "allowAccountRegistration", "applyEngine", "chatGptProjectUrl", "chatGptConcurrency"]) {
+  for (const key of ["maxPerRun", "maxSubmittedPerRun", "exportFiles", "autoFetch", "jobrightRecommend", "hiringCafeUrl", "allowAccountRegistration", "applyEngine", "chatGptProjectUrl", "chatGptConcurrency"]) {
     console.log(`  ${key.padEnd(24)} ${JSON.stringify(stored[key])}`);
   }
 

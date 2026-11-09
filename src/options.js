@@ -120,8 +120,8 @@ async function startRun() {
   if (missing.length) { location.hash=`profile/focus/${missingProfileFields(profile)[0][0]}`; notify(`Before starting, add: ${missing.join(', ')}. Then save your changes.`,true); return; }
   const unknown=(await allHistory()).filter(r=>r.kind==='external' && !companyResolved(r));
   if(unknown.length) {location.hash='history';notify(`Set ${unknown.length} missing company name(s) before starting.`,true);return;}
-  if (!profile.dryRun && !confirm('Automatic submission is enabled. Submit applications from your loaded links and enabled feeds?')) return;
-  await chrome.runtime.sendMessage({type:'run'});location.hash='monitor'; notify(profile.dryRun ? 'Review run started. Forms will be left open.' : 'Application run started.');
+  if (!confirm('Automatic submission is enabled. Submit applications from your loaded links and enabled feeds?')) return;
+  await chrome.runtime.sendMessage({type:'run'});location.hash='monitor'; notify('Application run started.');
 }
 async function requireIdle() { if ((await chrome.runtime.sendMessage({type:'state'})).running) throw new Error('Stop the current run before changing applied history.'); }
 async function showHistoryPreview(candidates,details = '') {

@@ -445,7 +445,16 @@ async function planForm(fields, { profile, context, services, call, log, company
   }
   const demographic = plan.blocked.find((entry) => isDemographicQuestion(entry.label));
   if (demographic) return { park: `a required demographic answer needs profile review: ${demographic.reason}` };
-  if (plan.blocked.length > 0) return { park: `required candidate information needs review: ${plan.blocked.map((entry) => entry.reason).join("; ")}` };
+  if (plan.blocked.length > 0) {
+    // Written down before parking, so the question that cost this
+    // application is on the Questions page rather than only in the
+    // sentence below. Demographic and salary blocks are deliberately not
+    // recorded: both are answered by a setting that already exists, and
+    // putting them on the page would ask the applicant to type an answer
+    // the profile is meant to hold.
+    await services.remember?.(plan.blocked.map((entry) => ({ question: entry.label, reason: entry.reason, required: true, options: entry.options ?? [], type: entry.type ?? "" })));
+    return { park: `required candidate information needs review: ${plan.blocked.map((entry) => entry.reason).join("; ")}` };
+  }
 
   // A menu that only renders when opened has no options in the inventory, so
   // the model was answering "Degree" blind against a list it could not see.
@@ -494,6 +503,17 @@ async function planForm(fields, { profile, context, services, call, log, company
         missing.length > 0 ? `required candidate answers are not supported by saved facts: ${missing.map((question) => question.question).join("; ")}` : "",
         refused.length > 0 ? `required answer(s) the control could not honestly hold: ${refused.map((question) => `"${question.question}" was answered "${question.refused.slice(0, 30)}"`).join("; ")}` : "",
       ].filter(Boolean);
+      // Both kinds go to the page. A refused answer is as much a question
+      // for the applicant as a missing one - more, since no profile field
+      // will ever fix it.
+      await services.remember?.(
+        requiredUnknown.map((question) => ({
+          question: question.question,
+          required: true,
+          options: plan.questions.find((entry) => entry.key === question.key)?.options ?? [],
+          reason: question.refused === undefined ? "no saved fact supports an answer" : `the control could not hold "${String(question.refused).slice(0, 30)}"`,
+        })),
+      );
       return { park: said.join("; and ") };
     }
     plan.fills.push(...answers.filter((answer) => !misfit.includes(answer)));

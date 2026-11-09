@@ -67,9 +67,10 @@ protecting you is step 1: a run refuses to start until your profile carries a
 name, email, phone, location, start date and work-authorisation answer, so an
 unconfigured install cannot send anything.
 
-If you would rather read what it writes before anything leaves your machine, turn
-**Review before sending** *on* in **Settings → Application mode** before step 4,
-watch the first few, then turn it back off.
+There is no fill-only mode to try first. One existed, and a machine left in it
+filled forms for seven hours and sent none of them, so it was removed. If you want
+to watch before trusting it, set **Application attempts per run** to `1`, read what
+that one application did in **Applications → Details**, then set it back to `0`.
 
 ---
 
@@ -146,9 +147,8 @@ filter uses **Save role filter**, and the optional filters use **Save filters**.
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Review before sending** | Off | Fills forms and leaves them open instead of submitting. Off by default, so the bot submits for real. Turn it **on** for a first run if you want to read what it writes before anything is sent. |
 | **Application attempts per run** | 0 (unlimited) | Stops the run after this many attempts. `0` means unlimited. Skipped, filtered and unsupported listings don't count. |
-| **Confirmed submissions per run** | 0 | Stops after this many *confirmed* submissions. `0` means no target. Set attempts to `0` to keep trying until this is met. Needs automatic submission. |
+| **Confirmed submissions per run** | 0 | Stops after this many *confirmed* submissions. `0` means no target. Set attempts to `0` to keep trying until this is met. |
 | **Pause between jobs (ms)** | 2000 | A flat wait between jobs. Separate from the per-board and per-employer pacing below. |
 | **Form filler** | Apply module | *Apply module* drives each board through its own adapter and will attempt careers pages no adapter recognises. *Original filler* is the older code path — switch back if a board starts misbehaving. |
 
@@ -396,8 +396,8 @@ out, disk nearly full, a board failing every attempt. The *Needs you* card at th
 top of the run monitor names the condition and the remedy. Pressing **Start run**
 is what clears a condition you have dealt with.
 
-**Nothing is being submitted.** Check *Review before sending* in Application mode —
-if it is on, forms are filled and left open by design.
+**Nothing is being submitted.** Check *Application attempts per run* is not set to
+a small number, and look at the run log for a quarantined board or a dead feed.
 
 **It only applies through one board.** Look at *Attempts by platform* on the run
 monitor. A board missing entirely was absent from the day's supply; a board present

@@ -5,8 +5,7 @@
  * exactly why it needs a file of its own: the settings that made the bot
  * safe to test are the settings that make it useless unattended, and they
  * were changed one at a time, by hand, in an options page nobody will be
- * sitting at tonight. `dryRun` on its own fills three hundred forms and
- * sends nothing. `maxPerRun: 2` stops the night after two. `exportFiles`
+ * sitting at tonight. `maxPerRun: 2` stops the night after two. `exportFiles`
  * off writes database rows and no evidence a person can hold. Each was
  * correct when it was set and each is a silent zero by morning.
  *
@@ -39,7 +38,7 @@ const ALREADY_APPLIED = [
 ];
 
 /**
- * `dryRun` off is the whole point. `maxPerRun` and `maxSubmittedPerRun` go
+ * `maxPerRun` and `maxSubmittedPerRun` go
  * to zero because the ceiling belongs to the day's target and the pacing
  * in schedule.js, not to a per-run counter that was only ever there to
  * keep a test short - a run that stops at two and hands back to autopilot
@@ -50,7 +49,6 @@ const ALREADY_APPLIED = [
  * finishes, which is the other way this run could have applied to nothing.
  */
 const PROFILE = {
-  dryRun: false,
   maxPerRun: 0,
   maxSubmittedPerRun: 0,
   exportFiles: true,

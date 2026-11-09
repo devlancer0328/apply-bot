@@ -210,7 +210,7 @@ function browserFor(site) {
 const PROFILE = withDefaults({
   firstName: "Daniel", lastName: "Torres", email: "someone@example.test", phone: "+1 (929) 489-1252",
   city: "Temple", state: "TX", country: "United States", linkedin: "https://linkedin.com/danieltorres8483",
-  workAuthorization: "us-citizen", requiresSponsorship: "no", nonCompete: "no", over18: "yes", dryRun: false,
+  workAuthorization: "us-citizen", requiresSponsorship: "no", nonCompete: "no", over18: "yes",
 });
 const RESUME = new Blob([new Uint8Array([37, 80, 68, 70])], { type: "application/pdf" });
 const requestFor = (site) => ({
