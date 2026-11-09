@@ -231,6 +231,30 @@ never ask).
 | **Experience fallback (years)** | Used for generic "years of experience" fields. Set `0` if a single broad figure would be misleading |
 | **Willing to relocate** | Yes / No |
 | **Willing to travel** | Yes / No |
+| **Salary range — bottom** | The figure used when a form asks for a minimum. `0` on both ends means compensation questions stop for you instead |
+| **Salary range — top** | What you want. Used for "desired", "expected" and open-ended pay questions |
+| **Salary period** | Per year, month, week, day or hour. Set this to match how you wrote the figures |
+| **Salary currency** | Three-letter code, e.g. `USD` |
+
+**How a pay question gets answered.** Three things are tried, in order. First the
+bot researches the actual employer and role with ChatGPT web search, using this
+prompt:
+
+> Based on JD and company, tell me what compensation this position would be. Must
+> be consider exact salary range of that kind of roles in the company.
+
+It prefers the company's own postings and disclosures, falls back to comparable
+companies and then to published market data, and says on the run record which of
+those a figure came from. If that comes back with nothing usable, your range above
+is typed instead. Only if you left both at `0` does the application stop and wait
+for you.
+
+The figures typed are always the ones you wrote — a "minimum" question gets the
+bottom, everything else gets the top, and a box with room for a sentence gets
+"$150,000 - $180,000 per year". Nothing is averaged and no third number is invented.
+Leaving these at `0` is a reasonable choice if you would rather answer pay by hand,
+but be aware that it was the single largest cause of stalled applications in
+testing: fifteen in one night, more than captchas and demographics combined.
 
 **Work authorization and standard questions** — the questions nearly every US
 application asks: **US work authorization** (US citizen, Permanent resident, Visa

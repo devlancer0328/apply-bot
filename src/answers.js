@@ -21,8 +21,9 @@
  * companies using the same board.
  */
 
-import { isCompensationQuestion, hasCompensationResearch } from "./salary.js";
+import { isCompensationQuestion, hasCompensationResearch, statedCompensationAnswer } from "./salary.js";
 import {demographicWordings,isPronounAnswer,chooseDemographicOption} from './demographics.js';
+import {packAnswer,fillCompany} from './question-pack.js';
 
 const yesNoAnswer = value => value === 'yes' ? 'Yes' : value === 'no' ? 'No' : '';
 
@@ -592,6 +593,21 @@ function bankedAnswer(profile, field) {
 }
 
 /**
+ * The pack's answer to the question this field is asking, with the
+ * employer's name written back into it.
+ *
+ * The label and not `askedSubject`, because the pack is keyed on the
+ * question a person read and answered on the Questions page. The
+ * machine names folded into the subject differ per posting and would
+ * make every employer's copy of one question a separate entry.
+ */
+function packedAnswer(context, field) {
+  const asked = String(field?.label ?? "").trim() || operativeQuestion(field);
+  if (!asked) return "";
+  return fillCompany(packAnswer(context?.answerPack, asked, context?.company), context?.company);
+}
+
+/**
  * The judgement questions, and the one test that decides which of them may
  * be answered without the applicant.
  *
@@ -743,6 +759,35 @@ const RULES = [
     pattern: /./,
     when: (field, profile) => field.type !== "file" && Boolean(bankedAnswer(profile, field)),
     value: (p, _ctx, field) => bankedAnswer(p, field),
+  },
+
+  /**
+   * The applicant's answers to questions they were actually asked.
+   *
+   * Second only to the bank, and for the same reason: both are the
+   * applicant speaking. The difference is how the words got there. A
+   * bank line is a rule written on purpose, phrase and all; a pack
+   * entry is a question that parked an application, shown to them on
+   * the Questions page, and answered there. One is configuration and
+   * the other is a reply, so a bank line that collides with a pack
+   * entry wins - it was written later and more deliberately.
+   *
+   * Matched on the question with the employer's name taken out, so an
+   * answer given once covers every company that asks it. Nothing fuzzy:
+   * see question-pack.js for why a near match is not allowed to answer
+   * a real form.
+   *
+   * `answerFitsControl` is the one thing that can still reject a stored
+   * answer. "No" typed against a yes/no menu is the same answer on the
+   * next form; "No" against a paragraph box that wanted an explanation
+   * is not, and that question goes back to being asked.
+   */
+  {
+    id: "answer-pack",
+    pattern: /./,
+    when: (field, profile, context) =>
+      field.type !== "file" && answerFitsControl(field, packedAnswer(context, field)) && Boolean(packedAnswer(context, field)),
+    value: (_p, context, field) => packedAnswer(context, field),
   },
 
   // Documents.
@@ -1443,10 +1488,19 @@ export function resolveField(field, profile, context) {
 
   const subject = haystack(field);
   if (isCompensationQuestion(subject)) {
-    if (!hasCompensationResearch(context.compensation)) return {outcome:field.required ? 'blocked' : 'skip',rule:'salary-research',reason:'This compensation field needs cited company/role web research; no fallback salary is allowed.'};
+    if (!hasCompensationResearch(context.compensation)) {
+      // Research first, the applicant's own range second, a person
+      // third. The order is the point: a figure calibrated to this
+      // employer is better than a standing one, but a standing one the
+      // applicant wrote down is far better than a filled application
+      // stopping on the last box.
+      const stated = statedCompensationAnswer(field, profile);
+      if (stated) return {outcome:'fill',rule:'salary-stated',value:stated,candidates:[stated]};
+      return {outcome:field.required ? 'blocked' : 'skip',rule:'salary-research',reason:'This compensation field needs cited company/role web research, and no salary range is set in the profile.'};
+    }
     return {outcome:'ask',question:field.label || field.name || field.id,options:field.options || [],compensation:true};
   }
-  const rule = RULES.find((entry) => entry.pattern.test(subject) && (!entry.when || entry.when(field, profile)));
+  const rule = RULES.find((entry) => entry.pattern.test(subject) && (!entry.when || entry.when(field, profile, context)));
 
   if (rule && rule.attach) {
     return { outcome: "attach", document: rule.attach, rule: rule.id };

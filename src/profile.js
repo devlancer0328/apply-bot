@@ -1,6 +1,7 @@
 ﻿/** User-owned settings. Resume context stays in ChatGPT. */
 import {FILTER_DEFAULTS,normalizeFilters} from './filters.js';
 import {ROLE_DEFAULTS} from './roles.js';
+import {SALARY_PERIODS} from './salary.js';
 export const DEFAULT_PROFILE = {
   ...FILTER_DEFAULTS,
   // The roles the applicant will take, stated rather than inferred. Off by
@@ -101,6 +102,19 @@ export const DEFAULT_PROFILE = {
   // the manual-application folder say which postings they were, so the
   // work is recoverable either way - the live form is not.
   keepCaptchaTabs: false,
+  // The compensation the applicant will say out loud when asked.
+  //
+  // Blank ships, and blank behaves exactly as before: the question
+  // parks unless ChatGPT's research produced cited evidence for this
+  // employer. Filled, it is what gets typed when that research comes
+  // back unavailable - which on a measured night was fifteen finished
+  // applications, more than any other single reason for stopping.
+  //
+  // Two figures rather than one because forms ask for both ends, and
+  // because a single "expected salary" invites the bot to derive a
+  // number nobody stated. Which end is used is decided by the question
+  // being asked; see statedCompensationAnswer in src/salary.js.
+  salaryMin: 0, salaryMax: 0, salaryPeriod: 'year', salaryCurrency: 'USD',
   // Criminal history, as a standing statement rather than a guess.
   //
   // Unlike the blanks above, this one has a default, and the difference
@@ -186,6 +200,9 @@ export function withDefaults(stored = {}) {
   // default is the one value that would answer a conviction question on
   // its own - so a value nobody chose must not be read as that one.
   if (!CRIMINAL_RECORD.includes(value.criminalRecord)) value.criminalRecord = '';
+  for (const key of ['salaryMin', 'salaryMax']) value[key] = Math.max(0, Math.round(Number(value[key]) || 0));
+  if (!SALARY_PERIODS.includes(value.salaryPeriod)) value.salaryPeriod = 'year';
+  value.salaryCurrency = /^[A-Za-z]{3}$/.test(value.salaryCurrency) ? value.salaryCurrency.toUpperCase() : 'USD';
   value.roleFilterTitles = String(value.roleFilterTitles || '').trim().slice(0, 3000);
   // Remove the password distributed by old builds, including imported settings.
   if (/^Vhkautmd/.test(value.workdayPassword)) value.workdayPassword = '';

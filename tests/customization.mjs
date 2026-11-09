@@ -68,7 +68,16 @@ const source={url:'https://example.test/careers/engineer',title:'Company posting
 const researchPayload={status:'researched',company:payJob.company,role:payJob.title,location:'Seattle',currency:'USD',period:'year',basis:'base',minimum:140000,maximum:190000,recommendedAmount:173000,rationale:'AI-selected amount from the role evidence, not the midpoint.',sources:[source]};
 const nativeReply={searchEvidence:{nativeCitations:[{url:source.url,title:source.title}]}};
 await test('Compensation uses the exact user prompt and requests company-specific Search evidence',()=>{
- assert.ok(compensationPrompt(payJob).includes(SALARY_RESEARCH_PROMPT)); assert.match(compensationPrompt(payJob),/web search tool now/); assert.match(compensationPrompt(payJob),/Competitor-only or generic market figures are insufficient/);
+ assert.ok(compensationPrompt(payJob).includes(SALARY_RESEARCH_PROMPT)); assert.match(compensationPrompt(payJob),/web search tool now/);
+ // The prompt used to call generic market figures insufficient and tell
+ // the model to return unavailable without company evidence, and the
+ // model obeyed: compensation became the largest single reason a
+ // finished application stopped. It now names the fallback tiers and
+ // says that returning nothing is the worst outcome - while still
+ // refusing a fabricated citation, which is the part that was right.
+ assert.match(compensationPrompt(payJob),/comparable roles at similar companies/);
+ assert.match(compensationPrompt(payJob),/returning nothing is the worst outcome/);
+ assert.match(compensationPrompt(payJob),/Never invent a source URL/);
 });
 await test('Cited AI salary amounts survive validation without a midpoint calculation',()=>{
  const result=validateCompensation(researchPayload,nativeReply,payJob); assert.ok(hasCompensationResearch(result)); assert.equal(result.recommendedAmount,173000); assert.notEqual(result.recommendedAmount,(result.minimum+result.maximum)/2);
@@ -76,12 +85,22 @@ await test('Cited AI salary amounts survive validation without a midpoint calcul
  assert.equal(resolveField(question,withDefaults({}),{compensation:result}).outcome,'ask');
  assert.equal(resolveField(question,withDefaults({}),{jd:'Salary $140,000 - $190,000'}).outcome,'blocked');
 });
-await test('Missing citations, generic market figures, wrong employers and invalid research cannot become salary fallbacks',()=>{
- assert.throws(()=>validateCompensation(researchPayload,{},payJob));
+await test('Wrong employers and incoherent figures are still refused, while an uncited estimate is not',()=>{
+ // Still refused, because each would put a wrong or meaningless number
+ // in front of an employer.
  assert.throws(()=>validateCompensation({...researchPayload,company:'Another company'},nativeReply,payJob));
- assert.throws(()=>validateCompensation({...researchPayload,sources:[{...source,matchType:'generic-market'}]},nativeReply,payJob));
  assert.throws(()=>validateCompensation({...researchPayload,recommendedAmount:null},nativeReply,payJob));
- assert.throws(()=>validateCompensation({...researchPayload,sources:[{...source,url:'https://uncited.test/'}]},nativeReply,payJob));
+ assert.throws(()=>validateCompensation({...researchPayload,maximum:1000},nativeReply,payJob));
+ assert.throws(()=>validateCompensation({...researchPayload,period:'fortnight'},nativeReply,payJob));
+ // No longer refused. Demanding native citations threw away every
+ // answer ChatGPT gave without them, which stopped more applications
+ // than anything else; the figure is taken and graded instead.
+ const uncited=validateCompensation(researchPayload,{},payJob);
+ assert.ok(hasCompensationResearch(uncited)); assert.equal(uncited.cited,false); assert.equal(uncited.evidence.mode,'chatgpt-estimate');
+ // A source the transcript never cited is dropped from the evidence
+ // rather than taking the answer down with it.
+ const unsupported=validateCompensation({...researchPayload,sources:[{...source,url:'https://uncited.test/'}]},nativeReply,payJob);
+ assert.equal(unsupported.sources.length,0); assert.equal(unsupported.cited,false); assert.ok(hasCompensationResearch(unsupported));
 });
 await test('Required compensation questions cannot fall back to N/A or the first menu option',async()=>{
  let calls=0; setModelTransport(async()=>{calls++;return {text:'{"1":"INSUFFICIENT"}'};});
