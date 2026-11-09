@@ -241,7 +241,7 @@ await test('A slot reclaimed at its deadline stops counting, so one abandoned at
 });
 await test('The day plan refuses nonsense without falling back to no limits at all',()=>{
  const value=withScheduleDefaults({dailyTarget:'many',attemptConcurrency:40,boardGapMs:-5,attemptDeadlineMs:1,autopilot:'yes'});
- assert.equal(value.dailyTarget,300);assert.equal(value.attemptConcurrency,4);assert.equal(value.boardGapMs,0);
+ assert.equal(value.dailyTarget,300);assert.equal(value.attemptConcurrency,6);assert.equal(value.boardGapMs,0);
  assert.equal(value.attemptDeadlineMs,60000);assert.equal(value.autopilot,false);
  assert.equal(withScheduleDefaults({autopilot:true}).autopilot,true);
 });

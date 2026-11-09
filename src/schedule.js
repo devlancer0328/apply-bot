@@ -36,8 +36,26 @@ export const SCHEDULE_DEFAULTS = {
    * common shape - one form being filled while one waits on its mail -
    * without putting a third Gmail reader and a third loading tab in front
    * of a browser that can only render one of them at speed.
+   *
+   * Six now, not two. The reasoning above still holds for one board on
+   * one machine, but it was sizing the slowest half of the run against
+   * itself: a night of it submitted nine applications in seven hours.
+   * This is the sending half of a ten-worker budget, the writing half
+   * being `chatGptConcurrency`.
    */
-  attemptConcurrency: 2,
+  attemptConcurrency: 6,
+
+  /**
+   * Finished resumes allowed to pile up ahead of the form filler.
+   *
+   * The writer needs only ChatGPT and the filler needs a browser, a
+   * board that is answering and sometimes a person; tying the first to
+   * the second meant a captcha stopped both. Ten is about a quarter of
+   * an hour of writing banked against the filler being stuck, and is
+   * bounded because documents stale: compensation research inside one
+   * expires after six hours.
+   */
+  documentBacklog: 10,
   /** Smallest gap between two application starts on the same board. */
   boardGapMs: 45000,
   /**
@@ -93,7 +111,8 @@ const number = (value, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}
 export function withScheduleDefaults(stored = {}) {
   const value = { ...SCHEDULE_DEFAULTS, ...(stored && typeof stored === "object" ? stored : {}) };
   value.dailyTarget = number(value.dailyTarget, SCHEDULE_DEFAULTS.dailyTarget, { max: 5000 });
-  value.attemptConcurrency = number(value.attemptConcurrency, SCHEDULE_DEFAULTS.attemptConcurrency, { min: 1, max: 4 });
+  value.attemptConcurrency = number(value.attemptConcurrency, SCHEDULE_DEFAULTS.attemptConcurrency, { min: 1, max: 6 });
+  value.documentBacklog = number(value.documentBacklog, SCHEDULE_DEFAULTS.documentBacklog, { min: 1, max: 40 });
   value.boardGapMs = number(value.boardGapMs, SCHEDULE_DEFAULTS.boardGapMs, { max: 3600000 });
   value.perCompanyPerDay = number(value.perCompanyPerDay, SCHEDULE_DEFAULTS.perCompanyPerDay, { min: 1, max: 25 });
   value.employerGapMs = number(value.employerGapMs, SCHEDULE_DEFAULTS.employerGapMs, { max: 6 * 3600000 });

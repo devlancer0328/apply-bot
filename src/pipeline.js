@@ -6,15 +6,32 @@ export async function mapBounded(items,limit,work,stopped=()=>false){
 }
 /** An attempt the batch stopped waiting for. Never a value `apply` could return. */
 const ABANDONED=Symbol('abandoned');
-export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,remaining,prepareConcurrency=1,screenConcurrency=1,applyConcurrency=1,applyDeadlineMs=0,stopGraceMs=0,onAbandoned=()=>{},stopped=()=>false,phase=()=>{}}){
+export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,remaining,prepareConcurrency=1,screenConcurrency=1,applyConcurrency=1,readyBacklog=0,applyDeadlineMs=0,stopGraceMs=0,onAbandoned=()=>{},stopped=()=>false,phase=()=>{}}){
  phase('extracting');const extracted=(await mapBounded(entries,3,extract,stopped)).filter(Boolean);
  phase('screening');const eligible=(await mapBounded(extracted,Math.min(2,Math.max(1,screenConcurrency)),screen,stopped)).filter(Boolean);
  if(stopped())return;const selected=await choose(eligible);
  // A completed document must not wait behind every slower job in the batch.
- // Keep at most two jobs preparing/ready/applying in total. While a form is
- // active, at most one other preparation can occupy ChatGPT; its answers can
- // use the remaining worker.
- const width=Math.min(2,Math.max(1,prepareConcurrency)),pending=new Set(),ready=[];
+ // How much of ChatGPT a preparation may take at once is the caller's to
+ // decide: it owns the worker pool and knows how much of it the form
+ // filler needs left over for answers.
+ const width=Math.max(1,Math.floor(prepareConcurrency)||1),pending=new Set(),ready=[];
+ /**
+  * How many finished documents may wait their turn to be sent.
+  *
+  * This used to be `width` too, and `width` was capped at two, so the
+  * writer could never get more than two jobs ahead of the form filler -
+  * and the filler is the half that stops. A captcha, a quarantined board,
+  * a Workday wizard that will not load: any of them idles the writer
+  * within two jobs, though writing needs nothing but ChatGPT. The night
+  * this was measured on spent 5.5 of its 7.3 hours idle with no banked
+  * work to fall back on.
+  *
+  * Separate now: `width` is what ChatGPT carries at once, this is how
+  * deep the finished pile may get. Bounded rather than unlimited because
+  * documents go stale - the compensation research inside one expires
+  * after six hours, and a posting can close while its resume waits.
+  */
+ const backlog=Math.max(width,Math.floor(readyBacklog)||width);
  // Submissions stay sequential unless the caller widens them. One at a time
  // is correct whenever an attempt holds the browser for its whole length;
  // it is wrong once waiting for an emailed code stops holding anything,
@@ -22,7 +39,13 @@ export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,r
  const sending=Math.max(1,Math.floor(applyConcurrency)||1),inflight=new Set();
  let cursor=0,error;
  const launch=()=>{
-  while(!error&&!stopped()&&cursor<selected.length&&pending.size+ready.length<Math.min(width,remaining())){
+  // Three separate ceilings, and they used to be one. What ChatGPT will
+  // carry at once; how deep the finished pile may get; and the capacity
+  // the applicant actually left, which has to count the sends already in
+  // the air - two attempts started against one remaining submission would
+  // overshoot the target, and preparing a document for a job there is no
+  // room to send is two minutes of ChatGPT thrown away.
+  while(!error&&!stopped()&&cursor<selected.length&&pending.size<width&&pending.size+ready.length<backlog&&pending.size+ready.length+inflight.size<remaining()){
    const value=selected[cursor++];let task;
    task=Promise.resolve().then(()=>prepare(value)).then(result=>{if(result)ready.push(result);},e=>{error ||= e;}).finally(()=>pending.delete(task));pending.add(task);
   }
@@ -38,7 +61,12 @@ export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,r
   */
  const send=value=>{
   let timer=null,watch=null,task;
-  const work=Promise.resolve().then(()=>apply(value));
+  // Called straight away rather than off a microtask. The queue no longer
+  // awaits this before looping, so whatever the attempt does synchronously
+  // - above all setting the stop flag - has to be visible by the time the
+  // loop decides whether to prepare another job, or stop costs one wasted
+  // document every time.
+  const work=(async()=>apply(value))();
   const started=Date.now();
   // A number, or a function of the job: an account-plus-wizard board needs
   // longer than a one-page form, and holding both to the wizard's limit
@@ -90,7 +118,14 @@ export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,r
    if(error||stopped()||remaining()<=0)break;
    if(!canSend())continue;
    const value=ready.shift();if(!value)continue;
-   phase('applying');const task=send(value);if(sending<=1)await task;
+   // Launched, not awaited. Sequencing is `canSend`'s job - it already
+   // refuses a second send while one is in the air - and awaiting here
+   // as well meant the loop could not reach `launch()` until the
+   // application finished, so with sends held to one at a time the
+   // writer could never get ahead at all. An application stuck on a
+   // captcha stopped the writing too, which is the whole thing the
+   // backlog exists to prevent.
+   phase('applying');send(value);
   }
  }finally{
   const live=[...pending,...inflight];

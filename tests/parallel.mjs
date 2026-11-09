@@ -15,7 +15,9 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 await test('Worker width is configurable, bounded at four, and standalone chats cannot be forked implicitly',()=>{
  // Four is the bound because each worker holds a ChatGPT tab per kind of
  // task; anything outside one-to-four is somebody's typo, not a request.
- assert.equal(withDefaults().chatGptConcurrency,2);assert.equal(withDefaults({chatGptConcurrency:1}).chatGptConcurrency,1);
+ // Four by default: the writing half of a ten-worker budget, the sending
+ // half being the day plan's attemptConcurrency.
+ assert.equal(withDefaults().chatGptConcurrency,4);assert.equal(withDefaults({chatGptConcurrency:1}).chatGptConcurrency,1);
  assert.equal(withDefaults({chatGptConcurrency:4}).chatGptConcurrency,4);assert.equal(withDefaults({chatGptConcurrency:90}).chatGptConcurrency,4);
  assert.equal(withDefaults({chatGptConcurrency:0}).chatGptConcurrency,1);assert.equal(new ChatWorkerPool(90).limit,4);
  assert.equal(parallelChatUrl('https://chatgpt.com/g/g-p-daniel/c/old-thread'),'https://chatgpt.com/g/g-p-daniel/project');

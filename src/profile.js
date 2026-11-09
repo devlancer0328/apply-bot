@@ -16,7 +16,11 @@ export const DEFAULT_PROFILE = {
   // run's point of view nothing was.
   sheetUrl: '', pastedLinks: '', pairedLinks: '', autoFetch: true, jobrightRecommend: true,
   hiringCafeUrl: '', keepRunning: true,
-  chatGptProjectUrl: '', chatGptConcurrency:2, letterInstructions: '', answerInstructions: '',
+  // Four is the writing half of a ten-worker budget, the sending half
+  // being the day plan's `attemptConcurrency`. Needs a project address:
+  // every worker past the first opens its own conversation inside one,
+  // and a standalone chat cannot be written to by two at once.
+  chatGptProjectUrl: '', chatGptConcurrency:4, letterInstructions: '', answerInstructions: '',
   // One High-reasoning resume is two minutes in a ChatGPT tab and is the
   // whole throughput of a run (see src/writer.js). 'family' writes one per
   // role family - back-end, iOS, full-stack - and gives it to every later

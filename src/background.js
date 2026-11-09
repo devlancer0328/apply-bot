@@ -3702,9 +3702,17 @@ async function runInternal() {
         remember();
 
         fresh.sort((a,b)=>applicationPriority(b,knownJobs.get(identify(b)))-applicationPriority(a,knownJobs.get(identify(a))));
-        const batchSize=Math.min(normalizeFilters(profile).screeningBatchSize,Math.max(1,workers.effective,scheduleSettings.attemptConcurrency));
+        // How many postings are read and screened together, which is a
+        // different question from how many can be worked on at once. It
+        // used to be the smaller of the two, and the smaller was always
+        // the worker count: with two ChatGPT workers and two attempts the
+        // setting asking for twelve produced batches of two, so the whole
+        // pipeline ran two jobs deep and the backlog below had nothing to
+        // hold. The screening size leads now, and concurrency only raises
+        // it - a batch smaller than the number of workers would idle them.
+        const batchSize=Math.max(normalizeFilters(profile).screeningBatchSize,workers.effective,scheduleSettings.attemptConcurrency);
         for(let offset=0;offset<fresh.length&&!state.stopping&&remaining()>0;offset+=batchSize){
-          await stagedBatch(fresh.slice(offset,offset+batchSize),{extract:extractCandidate,screen:screenCandidate,choose:chooseCandidates,prepare:prepareCandidate,apply:applyCandidate,remaining,prepareConcurrency:workers.effective,screenConcurrency:workers.effective,applyConcurrency:scheduleSettings.attemptConcurrency,applyDeadlineMs:attemptDeadline,stopGraceMs:STOP_GRACE_MS,onAbandoned:(item,ms)=>{abandonCandidate(item,ms).catch(()=>{});},stopped:()=>state.stopping,phase});
+          await stagedBatch(fresh.slice(offset,offset+batchSize),{extract:extractCandidate,screen:screenCandidate,choose:chooseCandidates,prepare:prepareCandidate,apply:applyCandidate,remaining,prepareConcurrency:workers.effective,screenConcurrency:workers.effective,applyConcurrency:scheduleSettings.attemptConcurrency,readyBacklog:scheduleSettings.documentBacklog,applyDeadlineMs:attemptDeadline,stopGraceMs:STOP_GRACE_MS,onAbandoned:(item,ms)=>{abandonCandidate(item,ms).catch(()=>{});},stopped:()=>state.stopping,phase});
         }
         if(remaining()<=0)going=false;
       }
