@@ -1,4 +1,4 @@
-import {allJobs,getJob,saveJob,stateStorage,allQuestions,answerAsked,forgetQuestion,answerPack} from './store.js';
+import {allJobs,getJob,saveJob,recordResult,stateStorage,allQuestions,answerAsked,forgetQuestion,answerPack} from './store.js';
 import {unblocked} from './question-pack.js';
 import {resumable} from './application-needs.js';
 import {canonicalUrl} from './join.js';
@@ -15,6 +15,7 @@ import { classifyPairingFolder, pairingFolders, pairingLink, parsePairedLines, r
 import { findTab, focus } from './tabs.js';
 import { chatGptRoundTrip } from './chatgpt.js';
 import { ROOT, resultsCsv } from './vault.js';
+import { uploadApplication, uploadSettings } from './upload.js';
 import { bytesToBase64, base64ToBytes } from './codec.js';
 import { buildDocumentPdf } from './vendor/generation.js';
 import { toDocument } from './resume.js';
@@ -86,6 +87,66 @@ async function renderRoute() {
   } catch (error) { content.innerHTML = `<section class="card"><h2>${error.needsReload ? 'Finish the extension update' : 'Couldn’t open this view'}</h2><p class="muted">${h(error.message)}</p>${error.needsReload ? button('reload-extension','Reload extension','primary') : button('retry','Try again')}</section>`; fail(error); }
   finally { if (ticket === generation) content.setAttribute('aria-busy','false'); }
 }
+/**
+ * Every recorded application that could be sent to the upload service,
+ * oldest first, with the pieces the endpoint wants gathered from where
+ * each of them actually lives.
+ *
+ * Three stores, because an application is not kept in one place: the
+ * result row has the employer, the role and the folder; the job row has
+ * the posting text the resume was written from; the file store has the
+ * resume itself. A result whose resume has since been cleared out is
+ * carried anyway and reported when it is tried, rather than quietly
+ * dropped from a count the applicant is reading as "all of them".
+ */
+async function pastUploads() {
+  const [results,jobs] = await Promise.all([allResults(),allJobs()]);
+  const described = new Map(jobs.map(job => [job.id,job.jd ?? '']));
+  const rows = [];
+  for (const result of results.slice().sort((a,b) => (a.at ?? 0) - (b.at ?? 0))) {
+    const folder = result.detail?.folder;
+    if (!folder) continue;
+    rows.push({
+      result,
+      folder,
+      alreadySent: result.detail?.upload?.ok === true,
+      fields: {
+        name: `${data.profile.firstName ?? ''} ${data.profile.lastName ?? ''}`.trim(),
+        jobTitle: String(result.title ?? '').trim(),
+        companyName: String(result.company ?? '').trim(),
+        description: String(described.get(result.id) ?? '').trim(),
+      },
+    });
+  }
+  return rows;
+}
+
+/** The resume PDF out of an application's folder, whatever it was named. */
+async function archivedResume(folder) {
+  const files = await db({action:'fileMetadata',prefix:`${folder}/`});
+  const pdf = files.find(file => /\.pdf$/i.test(file.path) && !/cover[ -]?letter/i.test(file.path));
+  if (!pdf) return null;
+  const file = await db({action:'get',table:'files',id:pdf.id});
+  return file?.content ? { content:file.content, name:pdf.path.split('/').at(-1) } : null;
+}
+
+/**
+ * One recorded application, sent, with the outcome written back onto the
+ * record - so a second pass knows what already arrived, and a failure is
+ * still readable tomorrow.
+ */
+async function sendRecorded(row,settings) {
+  const resume = await archivedResume(row.folder);
+  const sent = resume
+    ? await uploadApplication({ url:settings.url, apiKey:settings.apiKey, fields:row.fields, resume:resume.content, resumeName:resume.name })
+    : { ok:false, error:'the resume for this application is no longer in the workspace' };
+  const record = { ...row.result, detail:{ ...(row.result.detail ?? {}), upload:{ ...sent, at:Date.now() } } };
+  await recordResult(record).catch(() => {});
+  row.result = record;
+  row.alreadySent = sent.ok;
+  return sent;
+}
+
 async function saveSettings() {
   // Every settings region on the page, not just the first. A second block
   // with its own Save button - the role filter is one - would otherwise
@@ -363,7 +424,49 @@ const actionHandlers = {
   'mark-applied':async target => { await requireIdle(); const r=data.results.find(r=>r.id===target.dataset.id); if(!r?.applyUrl) return; await importHistory([{...r,urls:historyUrls(r)}]); notify('Marked as already applied. Future matching jobs will be skipped.'); },
   backup:async () => { const value = await db({action:'export'}); download(base64ToBytes(value),`apply-bot-${new Date().toISOString().slice(0,10)}.sqlite3`); },
   'restore-backup':() => document.getElementById('backup-import').click(),
-  'export-settings':async () => { if (content.querySelector('#settings-form')) await saveSettings(); const exported = withDefaults(data.profile); delete exported.workdayPassword; delete exported.activeTemplateId; download(JSON.stringify(exported,null,2),'apply-bot-settings.json','application/json'); },
+  'export-settings':async () => { if (content.querySelector('#settings-form')) await saveSettings(); const exported = withDefaults(data.profile); delete exported.workdayPassword; delete exported.uploadApiKey; delete exported.activeTemplateId; download(JSON.stringify(exported,null,2),'apply-bot-settings.json','application/json'); },
+  /**
+   * One real application, sent, rather than a reachability check.
+   *
+   * A HEAD at the address would say the host is up and nothing about
+   * whether the key is accepted or the form shape is right, which are
+   * the two things that actually go wrong. So the most recent
+   * application with a resume still in the workspace is sent for real -
+   * and the endpoint's own answer, link and all, is what comes back.
+   */
+  'test-upload':async target => {
+    await saveSettings();
+    const settings = uploadSettings({ ...data.profile, uploadEnabled:true });
+    const report = content.querySelector('#upload-report');
+    if (settings.missing.length) { report.innerHTML = `<p class="info">Fill in ${h(settings.missing.join(' and '))} first.</p>`; return; }
+    const label = target.textContent; target.textContent = 'Sending…'; target.disabled = true;
+    try {
+      const candidate = (await pastUploads()).at(-1);
+      if (!candidate) { report.innerHTML = '<p class="info">No application with a resume has been recorded yet, so there is nothing to send as a test.</p>'; return; }
+      const sent = await sendRecorded(candidate, settings);
+      report.innerHTML = sent.ok
+        ? `<p class="info">Sent <strong>${h(candidate.fields.companyName)} — ${h(candidate.fields.jobTitle)}</strong>.${sent.resumeLink ? ` The service stored the resume at <a href="${pages.safeHref(sent.resumeLink)}" target="_blank" rel="noreferrer">${h(sent.resumeLink)}</a>.` : ''}</p>`
+        : `<p class="info">The service did not take it: ${h(sent.error)}</p>`;
+    } finally { target.textContent = label; target.disabled = false; }
+  },
+  'upload-past':async target => {
+    await saveSettings();
+    const settings = uploadSettings({ ...data.profile, uploadEnabled:true });
+    const report = content.querySelector('#upload-report');
+    if (settings.missing.length) { report.innerHTML = `<p class="info">Fill in ${h(settings.missing.join(' and '))} first.</p>`; return; }
+    const pending = (await pastUploads()).filter(row => !row.alreadySent);
+    if (!pending.length) { report.innerHTML = '<p class="info">Every recorded application has already been sent.</p>'; return; }
+    const label = target.textContent; target.disabled = true;
+    let sent = 0; const failures = [];
+    for (const [index,row] of pending.entries()) {
+      target.textContent = `Sending ${index + 1} of ${pending.length}…`;
+      const result = await sendRecorded(row, settings);
+      if (result.ok) sent += 1; else failures.push(`${row.fields.companyName || 'Unnamed employer'}: ${result.error}`);
+    }
+    target.textContent = label; target.disabled = false;
+    data.results = await allResults();
+    report.innerHTML = `<p class="info">${sent} of ${pending.length} sent.${failures.length ? `<br>${failures.slice(0,8).map(h).join('<br>')}${failures.length > 8 ? `<br>…and ${failures.length - 8} more.` : ''}` : ''}</p>`;
+  },
   'import-settings':() => document.getElementById('settings-import').click(),
   'export-csv':() => download(resultsCsv(data.results),`applications-${new Date().toISOString().slice(0,10)}.csv`,'text/csv'),
   'application-detail':async target => {

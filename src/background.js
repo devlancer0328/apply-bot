@@ -6,6 +6,7 @@ import {startClock,elapsedClock,tick} from './timing.js';
 import {confirmationSnapshot,newConfirmation,confirmedWizardReceipt} from './submission-evidence.js';
 import {snapshotWriter} from './run-snapshot.js';
 import {resumedEnding,stopEnding} from './stop-control.js';
+import {uploadApplication,uploadFields,uploadSettings} from './upload.js';
 import { stateStorage } from './store.js';
 /** Application pipeline: discover postings, tailor a resume through ChatGPT context, fill and verify forms, then review or submit. Resumes and evidence persist in SQLite. */
 
@@ -1052,6 +1053,13 @@ async function runOne(application, profile, attempt = soloAttempt) {
     } catch (error) {
       log("warn", `${application.company} - could not write the application folder: ${error?.message ?? error}`);
     }
+    // After the folder, so a copy that goes out is a copy of something
+    // already kept. Never before, and never instead - and wrapped,
+    // because a submitted application must not be turned into a failed
+    // one by anything that happens after Submit.
+    await sendApplication(application, profile, result).catch((error) => {
+      log("warn", `${application.company} - the upload service could not be reached: ${error?.message ?? error}`);
+    });
     return result;
   };
 
@@ -2505,6 +2513,33 @@ function boardOf(url) {
  * this folder by finishApplicationTab immediately before closing or review.
  * Returns the folder's path within the root.
  */
+/**
+ * The copy that leaves this machine, when the applicant has asked for one.
+ *
+ * Recorded on the result either way. A send that failed is the only
+ * trace of an application the tracker does not have, and "Send past
+ * applications" reads exactly this to know what to try again.
+ */
+async function sendApplication(application, profile, result) {
+  const settings = uploadSettings(profile);
+  if (!settings.on) return;
+  if (settings.missing.length) {
+    log("warn", `${application.company} - not sent to the upload service: it needs ${settings.missing.join(" and ")}.`);
+    result.detail = { ...(result.detail ?? {}), upload: { ok: false, at: Date.now(), error: `not configured: needs ${settings.missing.join(" and ")}` } };
+    return;
+  }
+  const sent = await uploadApplication({
+    url: settings.url,
+    apiKey: settings.apiKey,
+    fields: uploadFields(application, profile),
+    resume: application.resume,
+    resumeName: application.resumeName || "resume.pdf",
+  });
+  result.detail = { ...(result.detail ?? {}), upload: { ...sent, at: Date.now() } };
+  if (sent.ok) log("info", `${application.company} - sent to the upload service${sent.resumeLink ? `: ${sent.resumeLink}` : ""}.`);
+  else log("warn", `${application.company} - the upload service did not take this application: ${sent.error}. The application itself stands; use "Send past applications" in Settings to try again.`);
+}
+
 async function archive(application, profile, result, confirmedTabId, { documentsAgain = true, root = "applied", confirmationUrl: confirmedUrl = "" } = {}) {
   const folder = applicationFolder(application, root);
   const files = [];

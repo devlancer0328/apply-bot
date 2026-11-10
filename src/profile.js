@@ -216,6 +216,11 @@ export const DEFAULT_PROFILE = {
   // person who has set it up meant to.
   delayMs: 2000, maxPerRun: 0, maxSubmittedPerRun:0, foregroundTabs: true,
   exportFiles: true, generateOptionalLetters:false, profileRevision: 0,
+  // Off until it is asked for: an application posted to an address the
+  // applicant has not chosen is the one kind of copy that leaves this
+  // machine. The address is filled in because it is not a secret and
+  // typing it is only a chance to mistype it; the key is not.
+  uploadEnabled: false, uploadUrl: 'http://work.rson.store/api/external/upload-job', uploadApiKey: '',
 };
 /**
  * Bumped when a shipped default changes in a way that has to reach profiles
@@ -258,7 +263,7 @@ export function withDefaults(stored = {}) {
   // most of a batch turns a stored number into a bot that quietly applies
   // to nothing, which is indistinguishable from a broken feed.
   value.fitThreshold=Math.max(0,Math.min(80,Math.floor(Number(value.fitThreshold))||0));
-  for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled','keepCaptchaTabs','hardBlockers','fitCheckEnabled']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
+  for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled','keepCaptchaTabs','hardBlockers','fitCheckEnabled','uploadEnabled']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
   const revision = Number(stored?.profileRevision) || 0;
   if (revision < 1) value.exportFiles = true;
   // Only onto a field nobody has written in. Overwriting a stated
