@@ -104,16 +104,33 @@ await test('Company selection compares eligible roles without marking rejected r
  const result=selectCompanyRoles([manual,best,{...job,id:'c',company:'Other Employer'}]);
  assert.equal(result.selected.length,2);assert.equal(result.selected.find(j=>j.company===job.company).id,'a');assert.equal(result.alternatives.length,1);
 });
-await test('Extraction is bounded and awaited before screening, generation and multiple applications',async()=>{
- const events=[];let inFlight=0,peak=0,attempts=0;
+/**
+ * Extraction stays bounded, but it is no longer a barrier.
+ *
+ * Reading a posting is a page load and screening it is a ChatGPT
+ * request: different resources, and making the second wait for every
+ * one of the first bought nothing. It cost a measured 43% of ChatGPT's
+ * night (tests/pipeline-idle.mjs), because no document was being
+ * written and no form filled for as long as a batch took to read.
+ *
+ * What still has to hold is the bound - three readers, not six - and
+ * the ordering further down, where `choose` does see a whole window
+ * and a document is written before the application that uses it.
+ */
+await test('Extraction is bounded and overlaps screening, which still precedes generation and multiple applications',async()=>{
+ const events=[];let inFlight=0,peak=0,attempts=0,overlapped=false;
  await stagedBatch([0,1,2,3,4,5],{
   extract:async id=>{inFlight++;peak=Math.max(peak,inFlight);await new Promise(r=>setTimeout(r,2));events.push('extract'+id);inFlight--;return id===0?null:{id};},
-  screen:async job=>{assert.equal(inFlight,0);events.push('screen'+job.id);return job.id<=2?null:job;},
+  screen:async job=>{if(inFlight>0)overlapped=true;events.push('screen'+job.id);return job.id<=2?null:job;},
   choose:async jobs=>jobs,prepare:async job=>{events.push('generate'+job.id);return job;},
   apply:async job=>{events.push('apply'+job.id);attempts++;},remaining:()=>2-attempts,
  });
- assert.equal(peak,3);assert.equal(attempts,2);assert.equal(events.filter(x=>x.startsWith('generate')).length,2);
- assert.ok(events.findIndex(x=>x.startsWith('screen'))>events.map((x,i)=>x.startsWith('extract')?i:-1).reduce((a,b)=>Math.max(a,b)));
+ assert.equal(peak,3,'three readers at once, not one per posting');
+ assert.ok(overlapped,'screening should start while postings are still being read');
+ assert.equal(attempts,2);assert.equal(events.filter(x=>x.startsWith('generate')).length,2);
+ // `choose` still sees the whole batch, so nothing is written until the
+ // last posting has been screened and the best role per employer picked.
+ assert.ok(events.findIndex(x=>x.startsWith('generate'))>events.map((x,i)=>x.startsWith('screen')?i:-1).reduce((a,b)=>Math.max(a,b)),'generation waits for the chosen window');
  assert.ok(events.indexOf('apply3')>events.indexOf('generate3'));
  assert.ok(events.indexOf('apply3')<events.indexOf('generate4'));
 });

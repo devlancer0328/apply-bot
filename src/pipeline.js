@@ -6,10 +6,84 @@ export async function mapBounded(items,limit,work,stopped=()=>false){
 }
 /** An attempt the batch stopped waiting for. Never a value `apply` could return. */
 const ABANDONED=Symbol('abandoned');
-export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,remaining,prepareConcurrency=1,screenConcurrency=1,applyConcurrency=1,readyBacklog=0,applyDeadlineMs=0,stopGraceMs=0,pickReady=()=>0,readyPauseMs=1000,onAbandoned=()=>{},stopped=()=>false,phase=()=>{}}){
- phase('extracting');const extracted=(await mapBounded(entries,3,extract,stopped)).filter(Boolean);
- phase('screening');const eligible=(await mapBounded(extracted,Math.min(2,Math.max(1,screenConcurrency)),screen,stopped)).filter(Boolean);
- if(stopped())return;const selected=await choose(eligible);
+
+/**
+ * A queue one stage hands to the next, with an end-of-stream signal.
+ *
+ * `take()` resolves with the next item, or with `null` once the stream
+ * is closed and drained - which is what lets a stage worker return
+ * instead of polling.
+ */
+function channel(){
+ const items=[],waiting=[];let closed=false;
+ return {
+  size:()=>items.length,
+  put(value){const next=waiting.shift();if(next)next(value);else items.push(value);},
+  close(){closed=true;while(waiting.length)waiting.shift()(null);},
+  take(){
+   if(items.length)return Promise.resolve(items.shift());
+   if(closed)return Promise.resolve(null);
+   return new Promise(resolve=>waiting.push(resolve));
+  },
+ };
+}
+
+/** `width` workers pulling from `inbox` until it closes, or until `halt` says so. */
+function pump(width,inbox,work,halt,fail){
+ return Promise.all(Array.from({length:width},async()=>{
+  for(;;){
+   if(halt())return;
+   const item=await inbox.take();
+   if(item===null)return;
+   if(halt())return;
+   try{await work(item);}catch(error){fail(error);return;}
+  }
+ }));
+}
+
+/**
+ * One batch of postings, from a link to a sent application.
+ *
+ * ## Why the stages are not barriers any more
+ *
+ * They used to be: every posting in the batch was read, then every one
+ * was screened, and only then did the first resume get written. Both
+ * halves of the night sat out that opening - no document was being
+ * written and no form was being filled, for as long as it took to read
+ * and screen a dozen postings.
+ *
+ * Measured on a simulated night at four workers (tests/pipeline-idle.mjs),
+ * that cost 43% of ChatGPT's time and 37% of the application slots', and
+ * none of the cheap fixes touched it: bigger batches and overlapping
+ * discovery were each worth about one per cent, because the dead time
+ * was inside the batch rather than between batches.
+ *
+ * So reading and screening are continuous stages now. A posting that has
+ * been screened moves on while the one behind it is still being read,
+ * and the writers and senders carry on with the previous window the
+ * whole time.
+ *
+ * ## Why `choose` still sees a set
+ *
+ * Because it cannot answer one posting at a time. It scores a group in a
+ * single ChatGPT call, and it picks the best role per employer across
+ * the group - fed one at a time it would apply to the first role it saw
+ * rather than the best one, which is a worse application every time an
+ * employer has posted twice.
+ *
+ * It keeps a window instead, `chooseWindow` wide. What went is the
+ * barrier around it: screening does not stop while a window is being
+ * chosen, and the engine below does not stop while the next window is
+ * being screened. Windows are handed over in the order the postings
+ * arrived, so a priority-sorted batch is still worked best-first.
+ *
+ * `chooseWindow` of 0 means one window of everything, which is the old
+ * behaviour exactly, and is what a caller that has already cut its own
+ * batches wants.
+ */
+export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,remaining,prepareConcurrency=1,screenConcurrency=1,applyConcurrency=1,extractConcurrency=3,chooseWindow=0,readyBacklog=0,applyDeadlineMs=0,stopGraceMs=0,pickReady=()=>0,readyPauseMs=1000,onAbandoned=()=>{},stopped=()=>false,phase=()=>{}}){
+ let error;
+ const fail=value=>{error ||= value;};
  // A completed document must not wait behind every slower job in the batch.
  // How much of ChatGPT a preparation may take at once is the caller's to
  // decide: it owns the worker pool and knows how much of it the form
@@ -37,7 +111,78 @@ export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,r
  // it is wrong once waiting for an emailed code stops holding anything,
  // because then the only thing a single slot buys is an idle browser.
  const sending=Math.max(1,Math.floor(applyConcurrency)||1),inflight=new Set();
- let cursor=0,error;
+ const selected=[];
+ let cursor=0,frontDone=false;
+ /**
+  * How a chosen window reaches the engine without it polling for one.
+  *
+  * The engine has nothing of its own to wait on while the first window
+  * is still being screened - no preparation, no attempt - so left to
+  * itself it would sleep out `readyPauseMs` and only then look. That is
+  * a second of four idle workers after every window, which is the thing
+  * this whole change is about.
+  */
+ let waiters=[];
+ const awaken=()=>{const list=waiters;waiters=[];for(const resolve of list)resolve();};
+ const windowReady=()=>{
+  let timer=null;
+  // Bounded as well as woken, so a Stop pressed while the stages are
+  // quiet is still noticed promptly.
+  return Promise.race([new Promise(resolve=>waiters.push(resolve)),new Promise(resolve=>{timer=setTimeout(resolve,Math.min(500,Math.max(50,readyPauseMs)));})]).finally(()=>clearTimeout(timer));
+ };
+
+ // Reading and screening stop for the same two reasons the engine does.
+ // Screening a posting the run has no room left to send is a ChatGPT
+ // request spent on a job that will never be looked at again.
+ const halt=()=>Boolean(error)||stopped()||remaining()<=0;
+
+ /**
+  * Reading, screening and choosing, running for as long as the batch does.
+  *
+  * The index each posting came in with is carried through so a window
+  * can be handed to `choose` in the caller's order rather than in
+  * whatever order screening happened to finish - the caller sorted them
+  * by priority, and losing that would quietly work the batch at random.
+  */
+ const front=(async()=>{
+  const read=channel(),screened=channel();
+  const windowSize=Math.max(1,Math.floor(chooseWindow)||entries.length||1);
+  const intake=channel();
+  for(const[index,entry]of entries.entries())intake.put({index,entry});
+  intake.close();
+
+  const reading=pump(Math.max(1,extractConcurrency),intake,async({index,entry})=>{
+   const value=await extract(entry,index);
+   if(value)read.put({index,value});
+  },halt,fail).then(()=>read.close());
+
+  const screening=pump(Math.min(2,Math.max(1,screenConcurrency)),read,async({index,value})=>{
+   const kept=await screen(value,index);
+   if(kept)screened.put({index,value:kept});
+  },halt,fail).then(()=>screened.close());
+
+  // Windows in arrival order. The last one is whatever is left when the
+  // stream ends, which is why a batch smaller than a window still runs.
+  let group=[];
+  const flush=async()=>{
+   if(!group.length||halt())return;
+   const ordered=group.sort((a,b)=>a.index-b.index).map(item=>item.value);
+   group=[];
+   const picked=await choose(ordered);
+   for(const value of picked??[])selected.push(value);
+   awaken();
+  };
+  try{
+   for(;;){
+    const item=await screened.take();
+    if(item!==null)group.push(item);
+    if(group.length>=windowSize||(item===null&&group.length))await flush();
+    if(item===null)break;
+   }
+  }catch(failure){fail(failure);}
+  await reading;await screening;
+ })().catch(fail).finally(()=>{frontDone=true;awaken();});
+
  const launch=()=>{
   // Three separate ceilings, and they used to be one. What ChatGPT will
   // carry at once; how deep the finished pile may get; and the capacity
@@ -141,10 +286,19 @@ export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,r
   try{await Promise.race([...tasks,new Promise(resolve=>{watcher=setInterval(()=>{if(stopped())resolve();},Math.min(stopGraceMs,500));})]);}
   finally{clearInterval(watcher);}
  };
+ // Still work coming: either a window already chosen and not yet written,
+ // something in flight, or a stage upstream that has not finished.
+ const alive=()=>!frontDone||cursor<selected.length||pending.size||ready.length||inflight.size;
  try{
-  while(!error&&!stopped()&&remaining()>0&&(cursor<selected.length||pending.size||ready.length||inflight.size)){
-   phase(pending.size?'processing':'generating');launch();
-   if(!canSend()){if(pending.size||inflight.size)await settleOrStop([...pending,...inflight]);else continue;}
+  while(!error&&!stopped()&&remaining()>0&&alive()){
+   phase(pending.size?'processing':cursor<selected.length||frontDone?'generating':'screening');launch();
+   if(!canSend()){
+    if(pending.size||inflight.size)await settleOrStop([...pending,...inflight]);
+    // Nothing of our own to wait on, and the stages upstream are still
+    // working: waiting on them rather than spinning on an empty queue.
+    else if(!frontDone&&cursor>=selected.length)await windowReady();
+    else continue;
+   }
    if(error||stopped()||remaining()<=0)break;
    if(!canSend())continue;
    const value=take();
@@ -173,6 +327,11 @@ export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,r
   // stopped run open until morning.
   if(stopped()&&stopGraceMs>0&&live.length)await Promise.race([Promise.all(live),new Promise(resolve=>setTimeout(resolve,stopGraceMs))]);
   else await Promise.all(live);
+  // The reading and screening stages hold no browser tab and no slot, but
+  // they do hold ChatGPT requests, and a caller told the batch is over
+  // while one is still in flight would reconfigure the worker pool under
+  // it. Bounded by `halt`, which every stage worker checks.
+  await front;
  }
  if(error)throw error;
 }

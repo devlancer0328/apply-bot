@@ -3915,9 +3915,20 @@ async function runInternal() {
         // hold. The screening size leads now, and concurrency only raises
         // it - a batch smaller than the number of workers would idle them.
         const batchSize=Math.max(normalizeFilters(profile).screeningBatchSize,workers.effective,scheduleSettings.attemptConcurrency);
-        for(let offset=0;offset<fresh.length&&!state.stopping&&remaining()>0;offset+=batchSize){
-          await stagedBatch(fresh.slice(offset,offset+batchSize),{extract:extractCandidate,screen:screenCandidate,choose:chooseCandidates,prepare:prepareCandidate,apply:applyCandidate,remaining,prepareConcurrency:workers.effective,screenConcurrency:workers.effective,applyConcurrency:scheduleSettings.attemptConcurrency,readyBacklog:scheduleSettings.documentBacklog,applyDeadlineMs:attemptDeadline,stopGraceMs:STOP_GRACE_MS,pickReady:readyToSend,onAbandoned:(item,ms)=>{abandonCandidate(item,ms).catch(()=>{});},stopped:()=>state.stopping,phase});
-        }
+        // The whole round in one call, with the screening size as the
+        // window `choose` sees rather than as a wall across the pipeline.
+        //
+        // It used to be the wall: a slice was read, screened, written and
+        // sent to exhaustion before the next slice was so much as looked
+        // at, so every batch opened with the writers and the senders both
+        // watching a dozen postings being read. Measured at 43% of
+        // ChatGPT's night and 37% of the application slots'
+        // (tests/pipeline-idle.mjs). Now reading and screening run for as
+        // long as the round lasts, `choose` still gets a full window so it
+        // can pick the best role per employer and score them in one
+        // request, and the writers carry on with the window before while
+        // the next one is being screened.
+        await stagedBatch(fresh,{extract:extractCandidate,screen:screenCandidate,choose:chooseCandidates,prepare:prepareCandidate,apply:applyCandidate,remaining,chooseWindow:batchSize,prepareConcurrency:workers.effective,screenConcurrency:workers.effective,applyConcurrency:scheduleSettings.attemptConcurrency,readyBacklog:scheduleSettings.documentBacklog,applyDeadlineMs:attemptDeadline,stopGraceMs:STOP_GRACE_MS,pickReady:readyToSend,onAbandoned:(item,ms)=>{abandonCandidate(item,ms).catch(()=>{});},stopped:()=>state.stopping,phase});
         if(remaining()<=0)going=false;
       }
       // Filtered and duplicate listings still count as newly discovered;
