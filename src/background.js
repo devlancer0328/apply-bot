@@ -3599,41 +3599,52 @@ async function runInternal() {
       await saveJob({...job,stage:'failed',reason:error.message});log('warn',job.company+' - documents could not be prepared: '+error.message);return null;}
   };
   /**
-   * Hold a board, and the employer, back to their own pace before taking a
-   * slot.
+   * How long this job's board and employer still want to be left alone.
    *
    * Three hundred form posts to one board in an afternoon, from one
    * address, at machine speed, is the shape that gets an applicant blocked
    * rather than rate limited - and being blocked costs every remaining
-   * application to that board, not just this one. The gap is per board, so
-   * the queue carries on with the other six while one of them cools down;
-   * waiting happens before the slot is taken so a paced job occupies
-   * nothing. Nothing is awaited between the last look and the booking, so
-   * two jobs on one board cannot both read a clear gap.
+   * application to that board, not just this one. The employer gap is the
+   * same idea one level down: three roles at one company are allowed in a
+   * day, but a recruiter who sees all three timestamped within a minute of
+   * each other is looking at a script.
    *
-   * The employer gap is the same idea one level down. Now that three roles
-   * at one company are allowed in a day, the thing that would give the bot
-   * away is not the number but the spacing: a recruiter who sees three
-   * applications from one candidate timestamped within a minute of each
-   * other is looking at a script. The batch already hands out same-employer
-   * roles round-robin, so by the time a second one arrives this gap has
-   * usually elapsed and costs nothing; it is the floor for the batch that
-   * held nothing else.
+   * This used to be a wait rather than a question, and the wait happened
+   * inside the worker that was about to send - so six senders holding six
+   * Greenhouse jobs all sat out the same forty-five seconds together,
+   * while finished documents for Ashby and Workday waited behind them for
+   * a slot. On a night measured at ninety-five per cent dead time, that is
+   * not a rounding error. The gaps are unchanged and the question is now
+   * asked of the whole ready pile at once, by `readyToSend` below: the
+   * queue sends whichever document is free and nobody waits for anybody.
    */
-  const paceBoard=async(job,board)=>{
-    const urls=[job.sourceUrl,job.applyUrl];
-    const held=()=>{const b=boardWaitMs(dailyLedger,board,scheduleSettings),e=employers.waitMs(job.company,urls);return b>=e?{ms:b,what:board}:{ms:e,what:job.company||'this employer'};};
-    for(let left=held();left.ms>0;left=held()){
-      if(state.stopping)return false;
-      jobActivity({...job,url:job.id},'applying',`Pacing ${left.what}: ${Math.ceil(left.ms/1000)}s before the next application there`);
-      await wait(Math.min(left.ms,5000));
-    }
+  const paceWaitMs=job=>Math.max(
+    boardWaitMs(dailyLedger,atsOf(job.applyUrl),scheduleSettings),
+    employers.waitMs(job.company,[job.sourceUrl,job.applyUrl]),
+  );
+  /**
+   * Which finished document goes next, or none of them yet.
+   *
+   * Nothing is awaited between this look and the booking in
+   * `applyCandidate`, so two jobs on one board cannot both read a clear
+   * gap.
+   */
+  const readyToSend=items=>{
+    const free=items.findIndex(item=>paceWaitMs(item.job)<=0);
+    if(free>=0)return free;
+    // Said on the job that will go first, so the panel shows a queue
+    // being paced rather than a queue that has stopped.
+    const next=items.reduce((soonest,item)=>paceWaitMs(item.job)<paceWaitMs(soonest.job)?item:soonest,items[0]);
+    if(next)jobActivity({...next.job,url:next.job.id},'applying',`Pacing ${atsOf(next.job.applyUrl)||next.job.company||'this employer'}: ${Math.ceil(paceWaitMs(next.job)/1000)}s before the next application there`);
+    return -1;
+  };
+  /** Booked in the instant before the attempt starts, never awaited. */
+  const takePace=(job,board)=>{
     // The gap is stretched while a board is cooling off. Multiplying here
     // rather than changing the setting keeps the applicant's own pace as
     // the thing the run goes back to the moment the board behaves again.
     dailyLedger=boardStarted(dailyLedger,board,{...scheduleSettings,boardGapMs:Math.round(scheduleSettings.boardGapMs*health.boardFactor(board))});keepDay();
-    employers.started(job.company,urls);
-    return true;
+    employers.started(job.company,[job.sourceUrl,job.applyUrl]);
   };
   /**
    * How long one attempt gets. Workday is an account, a mailed activation
@@ -3664,7 +3675,8 @@ async function runInternal() {
     // imposed is already in the batch, and opening it would be one more
     // request to a host that has stopped wanting them.
     if(health.quarantined(board)){jobActivity({...job,url:job.id},'held',`${board} is being left alone for a while after failing on every attempt, and will be tried again later today.`);employers.release(job.company,[job.sourceUrl,job.applyUrl]);return;}
-    if(!(await paceBoard(job,board)))return;
+    if(state.stopping)return;
+    takePace(job,board);
     // One job's bad hour is not the day's. Extraction and preparation have
     // always absorbed their own failures and carried on; sending did not,
     // so a single unreadable tab threw all the way out of the run loop and
@@ -3749,8 +3761,8 @@ async function runInternal() {
         seen: seenThisRun,
         duplicate: (job) => duplicates.matchCompany(job.company, job.applyUrl, job.sourceUrl) || duplicates.match(job.applyUrl, job.sourceUrl),
       });
-      if (!banked.length) return;
-      log('info', `${banked.length} posting(s) already have documents from an earlier run; sending those before discovering anything new.`);
+      if (!banked.length) return false;
+      log('info', `${banked.length} posting(s) already have documents written and not yet sent; sending those before anything else.`);
       const entries = banked.map((job) => ({ entry: { link: job.sourceUrl || job.applyUrl, company: job.company, title: job.title, resumeId: job.resumeLocked ? job.resumeId : '' }, job }));
       for (const { job } of entries) { seenThisRun.add(job.id); jobClocks.set(job.id, startClock()); knownJobs.set(job.id, job); }
       for (let offset = 0; offset < entries.length && !state.stopping && remaining() > 0; offset += scheduleSettings.attemptConcurrency * 2) {
@@ -3761,11 +3773,12 @@ async function runInternal() {
           extract: (item) => item, screen: (item) => item, choose: chooseCompanyRoles,
           prepare: prepareCandidate, apply: applyCandidate, remaining,
           prepareConcurrency: workers.effective, applyConcurrency: scheduleSettings.attemptConcurrency,
-          readyBacklog: scheduleSettings.documentBacklog, applyDeadlineMs: attemptDeadline, stopGraceMs: STOP_GRACE_MS,
+          readyBacklog: scheduleSettings.documentBacklog, applyDeadlineMs: attemptDeadline, stopGraceMs: STOP_GRACE_MS, pickReady: readyToSend,
           onAbandoned: (item, ms) => { abandonCandidate(item, ms).catch(() => {}); },
           stopped: () => state.stopping, phase,
         });
       }
+      return true;
     };
     await drainBanked();
 
@@ -3826,7 +3839,7 @@ async function runInternal() {
         // it - a batch smaller than the number of workers would idle them.
         const batchSize=Math.max(normalizeFilters(profile).screeningBatchSize,workers.effective,scheduleSettings.attemptConcurrency);
         for(let offset=0;offset<fresh.length&&!state.stopping&&remaining()>0;offset+=batchSize){
-          await stagedBatch(fresh.slice(offset,offset+batchSize),{extract:extractCandidate,screen:screenCandidate,choose:chooseCandidates,prepare:prepareCandidate,apply:applyCandidate,remaining,prepareConcurrency:workers.effective,screenConcurrency:workers.effective,applyConcurrency:scheduleSettings.attemptConcurrency,readyBacklog:scheduleSettings.documentBacklog,applyDeadlineMs:attemptDeadline,stopGraceMs:STOP_GRACE_MS,onAbandoned:(item,ms)=>{abandonCandidate(item,ms).catch(()=>{});},stopped:()=>state.stopping,phase});
+          await stagedBatch(fresh.slice(offset,offset+batchSize),{extract:extractCandidate,screen:screenCandidate,choose:chooseCandidates,prepare:prepareCandidate,apply:applyCandidate,remaining,prepareConcurrency:workers.effective,screenConcurrency:workers.effective,applyConcurrency:scheduleSettings.attemptConcurrency,readyBacklog:scheduleSettings.documentBacklog,applyDeadlineMs:attemptDeadline,stopGraceMs:STOP_GRACE_MS,pickReady:readyToSend,onAbandoned:(item,ms)=>{abandonCandidate(item,ms).catch(()=>{});},stopped:()=>state.stopping,phase});
         }
         if(remaining()<=0)going=false;
       }
@@ -3848,9 +3861,20 @@ async function runInternal() {
       if (sources.length === 0) break;
 
       // Each site visited once: that is a run, unless told to keep going.
-      if (!profile.keepRunning && sources.every((name) => retired.has(name) || completedFeeds.has(name))){state.stopReason={code:'one-pass',message:'Finished one pass of the enabled feeds. Enable Continue until no new jobs in Job sources for repeated discovery.'};break;}
+      const onePass = !profile.keepRunning && sources.every((name) => retired.has(name) || completedFeeds.has(name));
 
-      // A whole round with nothing to apply to: the run is done.
+      // Discovery having nothing left is not the same as the run having
+      // nothing left. A document written an hour ago and held back by a
+      // captcha, a quarantined board or a worker Chrome shut down is work
+      // already paid for, and ending here used to send the day to sleep
+      // for twenty minutes on top of it. The feeds are asked again only
+      // after the written work is gone.
+      if ((exhausted || onePass) && await drainBanked()) continue;
+
+      if (onePass){state.stopReason={code:'one-pass',message:'Finished one pass of the enabled feeds. Enable Continue until no new jobs in Job sources for repeated discovery.'};break;}
+
+      // A whole round with nothing to apply to, and nothing banked: the
+      // run is done.
       if (exhausted) {
         state.stopReason={code:'exhausted',message:'No new jobs found across a complete round of the enabled feeds.'};
         log("info", `Nothing left to apply to on ${rotation}. Finishing.`);

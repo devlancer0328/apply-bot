@@ -6,7 +6,7 @@ export async function mapBounded(items,limit,work,stopped=()=>false){
 }
 /** An attempt the batch stopped waiting for. Never a value `apply` could return. */
 const ABANDONED=Symbol('abandoned');
-export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,remaining,prepareConcurrency=1,screenConcurrency=1,applyConcurrency=1,readyBacklog=0,applyDeadlineMs=0,stopGraceMs=0,onAbandoned=()=>{},stopped=()=>false,phase=()=>{}}){
+export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,remaining,prepareConcurrency=1,screenConcurrency=1,applyConcurrency=1,readyBacklog=0,applyDeadlineMs=0,stopGraceMs=0,pickReady=()=>0,readyPauseMs=1000,onAbandoned=()=>{},stopped=()=>false,phase=()=>{}}){
  phase('extracting');const extracted=(await mapBounded(entries,3,extract,stopped)).filter(Boolean);
  phase('screening');const eligible=(await mapBounded(extracted,Math.min(2,Math.max(1,screenConcurrency)),screen,stopped)).filter(Boolean);
  if(stopped())return;const selected=await choose(eligible);
@@ -97,6 +97,36 @@ export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,r
  // one remaining submission would overshoot a target the applicant set.
  const canSend=()=>ready.length>0&&inflight.size<Math.min(sending,remaining());
  /**
+  * The next finished document to send, which is not always the oldest.
+  *
+  * The caller may hold one back - a board applied to seconds ago, an
+  * employer that has already had a role this hour - and the question it
+  * answers is "which of these may go now", not "may this one go yet".
+  * The difference is the whole point. Waiting on the job at the head of
+  * the queue was done inside a worker, so six senders carrying six
+  * Greenhouse jobs all sat out the same forty-five seconds together while
+  * finished documents for other boards waited behind them.
+  */
+ const take=()=>{
+  if(!ready.length)return null;
+  const index=Number(pickReady(ready));
+  if(!Number.isInteger(index)||index<0||index>=ready.length)return null;
+  return ready.splice(index,1)[0];
+ };
+ /**
+  * Nothing may be sent this instant, but something will be shortly.
+  *
+  * Short and bounded rather than waiting on the work: the work is a
+  * two-minute application and the pacing clears in seconds, so sleeping
+  * until an attempt finishes would give back the time this just saved.
+  */
+ const breathe=async()=>{
+  const live=[...pending,...inflight];
+  let timer=null;
+  try{await Promise.race([...(live.length?[Promise.race(live)]:[]),new Promise(resolve=>{timer=setTimeout(resolve,Math.max(50,readyPauseMs));})]);}
+  finally{clearTimeout(timer);}
+ };
+ /**
   * Wait for the next thing to finish, or for Stop, whichever comes first.
   *
   * Waiting on the work alone is waiting on the thing that is not
@@ -117,7 +147,13 @@ export async function stagedBatch(entries,{extract,screen,choose,prepare,apply,r
    if(!canSend()){if(pending.size||inflight.size)await settleOrStop([...pending,...inflight]);else continue;}
    if(error||stopped()||remaining()<=0)break;
    if(!canSend())continue;
-   const value=ready.shift();if(!value)continue;
+   const value=take();
+   if(!value){
+    // Every finished document is being held back by its board or its
+    // employer. The writer carries on regardless, which is why this
+    // waits rather than returning.
+    phase(pending.size?'processing':'generating');await breathe();continue;
+   }
    // Launched, not awaited. Sequencing is `canSend`'s job - it already
    // refuses a second send while one is in the air - and awaiting here
    // as well meant the loop could not reach `launch()` until the

@@ -118,6 +118,24 @@ const rateText=value=>value>=10?Math.round(value)+'/h':value>0?value.toFixed(1)+
  * named condition out of health.js with its own evidence and its own
  * remedy, so "fourteen failures" is never what is shown.
  */
+/**
+ * The day that has quietly ended.
+ *
+ * A machine ran with autopilot stored off, finished its first pass before
+ * one in the morning and did nothing for the six hours after it. Nothing
+ * was broken and nothing said so: the page read "Idle", which is also
+ * what it reads between two runs a minute apart. This says which of the
+ * two it is, and only when it matters - not running, not finished, and
+ * nothing coming.
+ */
+function dormantBody(run){
+ const day=run.day;
+ if(run.running||run.autopilot||!day?.target||day.met)return '';
+ if(run.stopReason?.code==='setup'||run.stopReason?.code==='health')return '';
+ return `<section class="card"><div class="card-head"><h2>Nothing further is scheduled</h2><span class="pill">Autopilot off</span></div>
+ <p class="info">${day.submitted||0} of ${day.target} sent today, and no run will start by itself. The rest of the day waits for Start run.</p>
+ <p class="hint">Turn on "Keep starting runs until the target is met" in the day plan to have the next run start on its own. Pressing Stop always turns it back off.</p></section>`;
+}
 function healthBody(run){
  const health=run.health;const conditions=health?.conditions||[];
  const halted=run.stopReason?.code==='health';
@@ -162,7 +180,7 @@ function dayBody(run){
 }
 export function monitorBody(run={}){
  const now=Date.now(),end=run.running?now:(run.finishedAt||run.lastActivityAt||now),workers=run.aiWorkers||{},last=now-(run.lastActivityAt||now);
- return `${healthBody(run)}${dashboard(run)}<details><summary>Day and run detail</summary><div class="detail-body">${dayBody(run)}</div></details><section class="card"><div class="card-head"><h2>${run.running&&run.stopping?'Stopping':run.running?'Running · '+h(run.phase):'Run status'}</h2><span class="pill">${run.startedAt?elapsedText(end-run.startedAt):'Not started'}</span></div><p class="${run.stopReason?.code==='error'?'info':'muted'}">${h(runSummary(run))}</p>${run.running&&last>60000?`<p class="info">No visible progress for ${elapsedText(last)}. ChatGPT may still be thinking; each response has a six-minute deadline. You can stop after the current operations.</p>`:''}<div class="stats">${[['Discovered',run.discovered||0],['Confirmed',run.targetSubmitted?`${run.submitted||0}/${run.targetSubmitted}`:run.submitted||0],['Attempts',run.attempted||0],['Screened',run.screened||0],['Held for review',run.review||0],['Rejected',run.rejected||0]].map(([label,value])=>`<div class="stat"><small>${label}</small><strong>${value}</strong></div>`).join('')}</div><p class="hint">Last progress: ${run.lastActivityAt?h(new Date(run.lastActivityAt).toLocaleTimeString()):'—'} · ${run.running?`Discovery source: ${h(run.discoverySource||'loaded links')}`:'Saved results remain in Applications and Jobs.'}</p></section>
+ return `${dormantBody(run)}${healthBody(run)}${dashboard(run)}<details><summary>Day and run detail</summary><div class="detail-body">${dayBody(run)}</div></details><section class="card"><div class="card-head"><h2>${run.running&&run.stopping?'Stopping':run.running?'Running · '+h(run.phase):'Run status'}</h2><span class="pill">${run.startedAt?elapsedText(end-run.startedAt):'Not started'}</span></div><p class="${run.stopReason?.code==='error'?'info':'muted'}">${h(runSummary(run))}</p>${run.running&&last>60000?`<p class="info">No visible progress for ${elapsedText(last)}. ChatGPT may still be thinking; each response has a six-minute deadline. You can stop after the current operations.</p>`:''}<div class="stats">${[['Discovered',run.discovered||0],['Confirmed',run.targetSubmitted?`${run.submitted||0}/${run.targetSubmitted}`:run.submitted||0],['Attempts',run.attempted||0],['Screened',run.screened||0],['Held for review',run.review||0],['Rejected',run.rejected||0]].map(([label,value])=>`<div class="stat"><small>${label}</small><strong>${value}</strong></div>`).join('')}</div><p class="hint">Last progress: ${run.lastActivityAt?h(new Date(run.lastActivityAt).toLocaleTimeString()):'—'} · ${run.running?`Discovery source: ${h(run.discoverySource||'loaded links')}`:'Saved results remain in Applications and Jobs.'}</p></section>
  ${run.feedScan?`<section class="card"><h2>Job discovery</h2><p>${h(run.feedScan.source)} &middot; ${run.feedScan.unique||0} unique links &middot; ${run.feedScan.percent||0}% of loaded list scanned</p><p class="hint">${h({'chunk-limit':'Reading job recommendations','waiting-for-loader':'Waiting for job cards to load','waiting-for-network':'Waiting for the job list to respond','waiting-for-next-page':'Waiting for the next page','confirming-bottom':'Checking for more jobs','backend-end-confirmed':'End of feed confirmed','stable-bottom-confirmed':'End of feed confirmed','confirmed-empty-feed':'No jobs available','feed-error':'Job list needs attention'}[run.feedScan.reason]||'Reading job recommendations')} &middot; ${run.feedScan.complete?'Feed scan complete':'More of this feed remains to be scanned'}</p></section>`:''}
  <section class="card"><div class="card-head"><h2>ChatGPT workers</h2><span class="pill">${workers.busy||0}/${workers.effective||1} active · ${workers.queued||0} waiting</span></div>${workers.reason?`<p class="info">${h(workers.reason)}</p>`:''}${(workers.tasks||[]).map(t=>`<article class="card"><h3>${h(t.label||'ChatGPT request')}</h3><p>${h(t.stage)}${t.mode?' ('+h(t.mode)+')':''} · ${elapsedText(now-t.startedAt)} · ${t.characters||0} response characters</p><p class="hint">${t.taskId?'Task '+h(t.taskId.slice(0,8)):''}${t.tabId?' · tab '+t.tabId:''}</p></article>`).join('')||'<p class="muted">No ChatGPT request is active.</p>'}</section>
  ${run.lastError?`<section class="card"><h2>Latest error</h2><p class="info">${h(run.lastError.message)}</p><p class="hint">${h(new Date(run.lastError.at).toLocaleString())}. Individual job failures can be followed by more work; the run status above explains whether the whole run stopped.</p></section>`:''}
