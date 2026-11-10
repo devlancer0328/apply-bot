@@ -3,6 +3,7 @@
 import { callModel, ProviderError } from "./vendor/generation.js";
 import { record } from "./spend.js";
 import { isCompensationQuestion, hasCompensationResearch } from "./salary.js";
+import { isDemographicQuestion } from "./demographics.js";
 import { MODEL } from "./writer.js";
 
 /**
@@ -55,6 +56,80 @@ function facts(context) {
   return lines.length > 0 ? lines.join("\n") : "";
 }
 
+/**
+ * A question about the employer or the world, not about the candidate.
+ *
+ * Everything else here rests on one rule: never state something about
+ * the candidate that the profile, the resume or the research does not
+ * support. That rule is why the bot can be trusted with a real
+ * application, and it is not being weakened.
+ *
+ * But some forms ask something the rule was never aimed at. "Is the
+ * following statement True or False? SeatGeek was founded in 2008" is
+ * not a claim about the candidate at all - it is a quiz about the
+ * employer, and the sources could not establish it if they tried. Under
+ * the strict contract the model returned INSUFFICIENT, the field came
+ * back unanswered, and an application with a written resume behind it
+ * stopped to wait for a person to type "True". The honest answer was a
+ * fact about the world the model already knew.
+ *
+ * So these are let through, and the gate is deliberately narrow:
+ *
+ * - Nothing in the candidate's voice. "You", "your", "I", "my",
+ *   "candidate", "applicant" all put a question back under the strict
+ *   contract, because "True or false: you are authorised to work in the
+ *   US" is a legal claim about the candidate wearing a quiz's clothes.
+ * - Demographic and compensation questions never qualify, whatever they
+ *   are phrased like. Those have their own sources and their own
+ *   refusals, and nothing here should be able to route around them.
+ * - A positive marker is required, not merely the absence of a bad one.
+ *   An unlabelled box reading "Years of experience" has no candidate
+ *   pronoun either, and guessing a number for it is exactly the harm the
+ *   strict contract exists to prevent. Either the question is posed as a
+ *   true/false quiz, or it asks after a matter of public record about
+ *   the employer by name.
+ *
+ * INSUFFICIENT stays available for these too. The model is asked for
+ * what it is confident of and told to refuse the rest, so a question it
+ * cannot answer still reaches the person rather than becoming a guess.
+ */
+/**
+ * Subjects that never become general knowledge, whatever the phrasing.
+ *
+ * `isCompensationQuestion` is written for the forms pay questions
+ * normally take - "desired salary", "expected rate" - and "True or
+ * false: this role pays 180000 per year" is none of them, so it read as
+ * an innocent quiz about the employer and would have been answered from
+ * the model's guess at a salary. Pay has exactly one source here and it
+ * is cited web research; a figure arrived at any other way is the thing
+ * the compensation path exists to refuse.
+ *
+ * The rest are the subjects where a wrong answer is not an embarrassment
+ * but a false statement on an application: status, clearance, criminal
+ * record. None of them belong to the model's general knowledge even when
+ * the sentence is about the role rather than the person.
+ */
+const NEVER_GENERAL = /\b(?:salary|salaries|compensation|wage|wages|pay|pays|paid|paying|bonus|equity|stock options?|rsus?|remuneration|stipend)\b|[$€£¥]\s?\d|\b\d{2,3},?\d{3}\b|\bper (?:hour|year|annum|month)\b|\bsponsor\w*|\bvisas?\b|\bwork authoriz\w*|\bh-?1b\b|\bgreen card\b|\bsecurity clearance\b|\bfelon\w*|\bconvict\w*|\bdrug (?:test|screen)\w*|\bbackground check\b/i;
+const CANDIDATE_VOICE = /\b(?:you|your|yours|yourself|i|me|my|mine|we|us|candidate|applicant)\b/i;
+const QUIZ = /\btrue or false\b|\btrue\s*\/\s*false\b|\btrue\/false\b/i;
+const EMPLOYER_FACT = /\b(?:found(?:ed|ing|er|ers)|establish(?:ed)?|headquarter\w*|based in|acquir\w+|merged\b|launch\w+|\bipo\b|ceo\b|chief executive|mission statement|core values|slogan|motto|tagline|stands for|headquarters)\b/i;
+
+export function asksGeneralKnowledge(question, company = "") {
+  const text = String(question?.question ?? question ?? "").trim();
+  if (!text) return false;
+  if (CANDIDATE_VOICE.test(text)) return false;
+  if (isDemographicQuestion(text) || isCompensationQuestion(text) || NEVER_GENERAL.test(text)) return false;
+  if (QUIZ.test(text)) return true;
+  const named = String(company ?? "").trim();
+  const aboutEmployer = /\b(?:this|the|our)\s+(?:company|organisation|organization|firm|employer)\b/i.test(text)
+    || (named.length > 2 && text.toLowerCase().includes(named.toLowerCase()));
+  return aboutEmployer && EMPLOYER_FACT.test(text);
+}
+
+/** What the model is allowed to draw on for one of those. */
+const KNOWLEDGE_RULE = "- One or more questions are marked GENERAL KNOWLEDGE. Those ask about the employer or the world, not about the candidate, and the sources above are not expected to contain the answer: answer them from well-established public knowledge. This permission covers nothing else - every other question keeps the rule above, and a general-knowledge question you are not confident of is still INSUFFICIENT rather than a guess.";
+const KNOWLEDGE_MARK = "GENERAL KNOWLEDGE - about the employer or the world, not the candidate; answer from well-established public knowledge, or INSUFFICIENT if unsure";
+
 /** Required fields still need supported candidate facts. */
 const MUST = `- This field is required, but factual support is still required. If the supplied profile and resume cannot establish the answer, return exactly INSUFFICIENT.
 - Never infer legal eligibility, licenses, personal relationships, demographic answers, dates, credentials or technology experience from silence.
@@ -94,6 +169,11 @@ function ownRules(settings) {
 
 function prompt(question, context, must, settings) {
   const choices = `\n\n${shapeOf(question)}`;
+  // A quiz about the employer is not a claim about the candidate, so the
+  // grounding rule that would refuse it does not apply - and neither does
+  // MUST, which says in so many words that the profile has to establish
+  // the answer.
+  const general = asksGeneralKnowledge(question, context.company);
 
   return `You are filling in one field of ${context.company || "a company"}'s application form for the ${
     context.title || "role"
@@ -103,13 +183,13 @@ ${sources(context)}
 
 ---
 
-FORM QUESTION: ${question.question}${choices}
+FORM QUESTION: ${question.question}${general ? `\n(${KNOWLEDGE_MARK})` : ""}${choices}
 
 Rules:
 - Use only what the sources above support. Do not invent employers, dates, numbers or credentials.
 - For compensation questions, reason from COMPENSATION WEB RESEARCH only. The AI chooses the appropriate answer for the requested range/amount, currency, period and base/total pay. Do not apply a default midpoint, invent a fallback, or treat an employer budget as candidate salary history. If unsupported or no offered option fits, return INSUFFICIENT even for REQUIRED fields.
 - Where the candidate lives, works from, or can start comes only from FACTS ABOUT THE CANDIDATE, never from the cities of past employers on the resume.
-${must ? MUST : "- No placeholders of any kind. If the sources cannot support an answer, reply with exactly: INSUFFICIENT"}
+${general ? KNOWLEDGE_RULE : must ? MUST : "- No placeholders of any kind. If the sources cannot support an answer, reply with exactly: INSUFFICIENT"}
 - Return only the answer text itself.${ownRules(settings)}`;
 }
 
@@ -234,10 +314,16 @@ function settle(raw, question, must) {
  * form will not send without.
  */
 function batchPrompt(questions, context, must, settings) {
+  const general = new Set(questions.flatMap((question, index) => (asksGeneralKnowledge(question, context.company) ? [index] : [])));
   const asked = questions
     .map((question, index) => {
-      const required = must.has(index);
-      return `[${index + 1}]${required ? " (REQUIRED - unsupported facts must still be INSUFFICIENT)" : ""} ${question.question}\n${shapeOf(question)}`;
+      // The knowledge mark replaces the REQUIRED one rather than joining
+      // it: REQUIRED says the sources must establish the answer, which is
+      // the opposite of what these questions need.
+      const tag = general.has(index)
+        ? ` (${KNOWLEDGE_MARK})`
+        : must.has(index) ? " (REQUIRED - unsupported facts must still be INSUFFICIENT)" : "";
+      return `[${index + 1}]${tag} ${question.question}\n${shapeOf(question)}`;
     })
     .join("\n\n");
 
@@ -257,7 +343,7 @@ Rules:
 - Use only what the sources above support. Do not invent employers, dates, numbers or credentials.
 - Where the candidate lives, works from, or can start comes only from FACTS ABOUT THE CANDIDATE, never from the cities of past employers on the resume.
 - For a question not marked REQUIRED: no placeholders of any kind; if the sources cannot support an answer, its value is exactly "INSUFFICIENT".
-${must.size > 0 ? MUST.replace(/^- This field is REQUIRED[^\n]*\n/, "- For a question marked REQUIRED, answer it:\n") : ""}
+${general.size > 0 ? `${KNOWLEDGE_RULE}\n` : ""}${must.size > 0 ? MUST.replace(/^- This field is REQUIRED[^\n]*\n/, "- For a question marked REQUIRED, answer it:\n") : ""}
 - Reply with a JSON object only, no commentary: the keys are the question numbers as strings ("1", "2", ...), every question present, each value the answer text for that question alone.${ownRules(settings)}`;
 }
 
