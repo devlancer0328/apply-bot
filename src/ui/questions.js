@@ -109,18 +109,23 @@ function parkedBar(parked) {
   if (!parked.length) {
     return `<section class="card"><h2>Stopped on something else</h2><p class="muted">No application is waiting on anything but a question. Ones that stop on a captcha, a required field or a missing profile answer appear here once nothing was sent to the employer.</p></section>`;
   }
-  const row = ({ job, captcha, reason }) => `<div class="progress-line">
+  // The picture is the difference between "a required field had no
+  // answer" and knowing which field, on which page, with what already
+  // typed into it. It is saved for every parked job; nothing until now
+  // offered it anywhere near the place those jobs are dealt with.
+  const row = ({ job, captcha, reason, picture }) => `<div class="progress-line">
     <strong>${h(job.company || "Employer not identified")}</strong>${job.title ? ` · ${h(job.title)}` : ""}
     <p class="hint">${h(reason || "Stopped before anything was sent.")}</p>
     <div class="actions">${captcha
       ? `${button("resume-parked", "I did not finish it - try again", "primary", `data-id="${h(job.id)}"`)}${button("parked-was-sent", "I finished it myself", "quiet", `data-id="${h(job.id)}"`)}`
-      : button("resume-parked", "Queue it again", "primary", `data-id="${h(job.id)}"`)}</div>
+      : button("resume-parked", "Queue it again", "primary", `data-id="${h(job.id)}"`)}${picture ? button("show-last-page", "See where it stopped", "quiet", `data-path="${h(picture)}"`) : ""}</div>
   </div>`;
   const plain = parked.filter((entry) => !entry.captcha);
   return `<section class="card"><div class="card-head"><h2>Stopped on something else</h2><span class="pill amber">${parked.length} waiting</span></div>
     <p class="muted">Nothing reached the employer for any of these, so queueing one again is a first application rather than a second. The documents are already written - the next run sends them without paying ChatGPT twice.</p>
     ${plain.length > 1 ? `<div class="actions">${button("resume-parked-all", `Queue all ${plain.length} that need no decision`, "primary")}</div>` : ""}
     ${parked.map(row).join("")}
+    <div id="parked-preview"></div>
   </section>`;
 }
 

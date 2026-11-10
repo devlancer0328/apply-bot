@@ -71,7 +71,10 @@ export function resumable(jobs, results) {
   .filter(job => PARKED.has(job.stage) && !(job.blockedBy ?? []).length && job.applicationData && (job.sourceUrl || job.applyUrl))
   .map(job => ({ job, result: byId.get(String(job.resultId)) }))
   .filter(({ result }) => result?.detail?.submissionAttempted === false)
-  .map(({ job, result }) => ({ job, captcha: Boolean(result.detail.captcha), reason: job.reason || result.reason || '' }))
+  // The page the attempt was last on, when one was saved. A parked job is
+  // the one a person has to work out for themselves, and the reason text
+  // alone - "a required field had no answer" - does not say which field.
+  .map(({ job, result }) => ({ job, captcha: Boolean(result.detail.captcha), reason: job.reason || result.reason || '', picture: result.detail.lastScreenshot?.path || job.lastScreenshot?.path || '' }))
   .sort((a, b) => (b.job.updatedAt || 0) - (a.job.updatedAt || 0));
 }
 /** Read the actual form. Optional prose must not delay a required resume. */

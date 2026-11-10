@@ -376,6 +376,29 @@ const actionHandlers = {
     if(picture?.content instanceof Blob)applicationImageUrl=URL.createObjectURL(picture.content);
     content.querySelector('#application-detail').innerHTML = `<section class="card"><h2>${h(record.company)} · ${h(record.title)}</h2><p class="muted">${h(record.reason || record.status)}</p><a href="${pages.safeHref(record.applyUrl)}" target="_blank" rel="noreferrer">Open application page ↗</a>${record.detail?.screenshotError ? `<p class="info">Final screenshot could not be completed; the application tab was kept open. ${h(record.detail.screenshotError)}</p>` : ''}${applicationImageUrl ? `<section class="card"><h3>Last saved application page</h3><p class="hint">Saved before the extension finished this attempt. ${h(new Date(screenshot.capturedAt).toLocaleString())}</p><a href="${applicationImageUrl}" target="_blank" rel="noreferrer"><img src="${applicationImageUrl}" alt="Last saved application page" style="display:block;max-width:100%;max-height:650px;object-fit:contain;border:1px solid #ddd;border-radius:8px"></a></section>` : ''}${compensationHtml(record.detail?.compensation)}<div class="file-list">${files.map(f => button('download-file',f.path === screenshot?.path ? 'Last page screenshot (PNG)' : h(f.path.slice(folder.length+1)),'',`data-id="${h(f.id)}"`)).join('') || '<p class="muted">No archived files for this result.</p>'}</div></section>`;
   },
+  /**
+   * The saved page for one parked or abandoned job, shown where the job is.
+   *
+   * The same image the Applications detail view has always had, reached
+   * from the two pages where somebody is actually trying to work out why
+   * an application stopped. Rendered next to the row rather than opened
+   * in a tab, because the point is to read it against the reason beside
+   * it.
+   */
+  'show-last-page':async target => {
+    const path = target.dataset.path;
+    const holder = content.querySelector('#parked-preview') || content.querySelector('#job-detail');
+    if (!holder) return;
+    const file = await db({action:'get',table:'files',id:path});
+    if (!(file?.content instanceof Blob)) {
+      holder.innerHTML = '<p class="info">That screenshot is no longer in the workspace. It may have been cleared, or saved while the disk was too full to keep pictures.</p>';
+      return;
+    }
+    clearApplicationImage();
+    applicationImageUrl = URL.createObjectURL(file.content);
+    holder.innerHTML = `<section class="card"><h3>Where it stopped</h3><p class="hint">${h(path)}</p><a href="${applicationImageUrl}" target="_blank" rel="noreferrer"><img src="${applicationImageUrl}" alt="The page this application stopped on" style="display:block;max-width:100%;max-height:650px;object-fit:contain;border:1px solid #ddd;border-radius:8px"></a><div class="actions">${button('download-file','Download the PNG','quiet',`data-id="${h(path)}"`)}</div></section>`;
+    holder.scrollIntoView({behavior:'smooth',block:'nearest'});
+  },
   'download-file':async target => { const file = await db({action:'get',table:'files',id:target.dataset.id}); if (file) download(file.content,file.path.split('/').at(-1),file.type); },
   // Everything the workspace holds, written to disk under the folder names
   // the runs would have used. For the profiles that applied for weeks with

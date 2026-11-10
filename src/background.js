@@ -57,6 +57,7 @@ import { suppliedApplication } from "./pairings.js";
 forgetKeys().catch(() => {});
 import { missingFromProfile } from "./profile.js";
 import { applicationFolder, dayFolder, logText, MANUAL_ROOT, onExportProblem, otherLinksCsv, otherLinksPath, resultsCsv, save, saveJson, stamp } from "./vault.js";
+import { captureFinalView } from "./evidence.js";
 
 /** The profile's authorization setting, in words a model can use. */
 const AUTHORIZATION_WORDS = {
@@ -1134,6 +1135,7 @@ async function runOne(application, profile, attempt = soloAttempt) {
   try {
     tabId = await openTab(application.applyUrl, profile.foregroundTabs);
     resident(tabId);
+    attemptTabs.set(application.id, tabId);
     const loadedAt = Date.now();
     await waitForForm(tabId);
     const formAt = Date.now();
@@ -1442,6 +1444,7 @@ async function runOne(application, profile, attempt = soloAttempt) {
     return finish("failed", error?.message ?? String(error));
   } finally {
     resident(null);
+    attemptTabs.delete(application.id);
     // Closed however it ended. Sent, failed or handed over, the record is on
     // disk and a tab left open on a machine nobody is watching is only a tab
     // left open - except where a person still has something to do on it.
@@ -1849,6 +1852,7 @@ async function runWorkday(application, profile, context, { finish, archived, get
     // field is written from the profile and the resume regardless.
     tabId = await openTab(workdayApplyUrl(application.applyUrl), profile.foregroundTabs);
     resident(tabId);
+    attemptTabs.set(application.id, tabId);
 
     const seen = { create: 0, signin: 0, activation: 0, unknown: 0, pages: new Map() };
     const deadline = Date.now() + 20 * 60 * 1000;
@@ -2041,6 +2045,7 @@ async function runWorkday(application, profile, context, { finish, archived, get
     return finish("failed", error?.message ?? String(error));
   } finally {
     resident(null);
+    attemptTabs.delete(application.id);
     // Closed however it ended. Sent, failed or handed over, the record is on
     // disk and a tab left open on a machine nobody is watching is only a tab
     // left open - except where a person still has something to do on it.
@@ -2421,6 +2426,23 @@ function appliedJobsText(rows) {
  * the workers or race the loop for a slot.
  */
 const offeredBack = new Set();
+
+/**
+ * The tab each live attempt is working in.
+ *
+ * Every other outcome photographs its own page on the way out, in the
+ * `finally` that ends the attempt. An abandoned one never gets there:
+ * the queue stopped waiting precisely because the attempt had stopped
+ * answering, and a wedged attempt does not reach its own ending. So the
+ * job was parked saying "no answer after twelve minutes; check Jobs for
+ * what it had reached" - and Jobs had nothing to show, because the only
+ * thing that knew what it had reached was the tab, left open on a
+ * machine nobody was watching and swept up later.
+ *
+ * Keyed by the application id so a run with four attempts in the air
+ * photographs the right one.
+ */
+const attemptTabs = new Map();
 
 /** Security codes already typed this run, so none is typed twice. */
 const usedCodes = new Set();
@@ -3717,6 +3739,38 @@ async function runInternal() {
    * Greenhouse form costing twenty-five minutes of the day instead of ten.
    */
   const attemptDeadline=item=>atsOf(item.job.applyUrl)==='workday'?scheduleSettings.wizardDeadlineMs:scheduleSettings.attemptDeadlineMs;
+  /**
+   * The page an abandoned attempt was last on, so there is something to
+   * look at afterwards.
+   *
+   * This is the one ending that photographs nothing by itself. Every
+   * other outcome takes its picture in the `finally` that closes the
+   * attempt, and a wedged attempt never reaches its own ending - which
+   * is why the queue gave up on it. The job was parked saying "check
+   * Jobs for what it had reached", and Jobs had nothing: the only record
+   * of what it had reached was a tab left open on a machine nobody was
+   * watching, swept up later by the reaper.
+   *
+   * Everything here is best-effort and swallowed. The attempt has
+   * already been written off; a screenshot that cannot be taken - the
+   * tab closed itself, the disk is full, the page will not answer - must
+   * not turn a recorded abandonment into an unrecorded one.
+   */
+  const photographAbandoned=async(item)=>{
+    if(!health.screenshots)return null;
+    const tabId=attemptTabs.get(item.application?.id);
+    if(!tabId)return null;
+    try{
+      const picture=await captureFinalView(tabId);
+      const folder=applicationFolder(item.application,MANUAL_ROOT);
+      const path=`${folder}/Abandoned page.png`;
+      await save(path,picture.content,{type:'image/png',overwrite:true});
+      return {path,folder,url:picture.url,title:picture.title,capturedAt:picture.capturedAt};
+    }catch(error){
+      log('warn',`${item.job.company||item.job.applyUrl} - the abandoned page could not be photographed: ${error?.message??error}`);
+      return null;
+    }
+  };
   /** An attempt the queue stopped waiting for; see stagedBatch's applyDeadlineMs. */
   const abandonCandidate=async(item,ms)=>{
     const {job}=item,reason=state.stopping
@@ -3725,8 +3779,11 @@ async function runInternal() {
     dailyLedger=recordOutcome(dailyLedger,{status:'abandoned',reason:state.stopping?'attempt still open when the run was stopped':'attempt abandoned after its deadline'});keepDay();
     state.lastError={at:Date.now(),message:`${job.company||job.applyUrl}: ${reason}`};
     jobActivity({...job,url:job.id},'abandoned',reason);
-    log('warn',`${job.company||job.applyUrl} - ${reason}. Its tab is left as it is; check Jobs for what it had reached.`);
-    await saveJob({...(await getJob(job.id))||job,stage:'abandoned',reason}).catch(()=>{});
+    // Taken before the row is written, so the row can carry the path and
+    // the Jobs page has something to offer instead of a sentence.
+    const picture=await photographAbandoned(item);
+    log('warn',`${job.company||job.applyUrl} - ${reason}. ${picture?'Its last page was photographed; open it from Jobs.':'Its tab is left as it is; check Jobs for what it had reached.'}`);
+    await saveJob({...(await getJob(job.id))||job,stage:'abandoned',reason,...(picture?{lastScreenshot:picture}:{})}).catch(()=>{});
     remember();
   };
   const applyCandidate=async item=>{
