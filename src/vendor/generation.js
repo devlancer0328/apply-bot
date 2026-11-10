@@ -39361,8 +39361,22 @@ function date4(params) {
 }
 
 // src/templates.js
-var FONT_OPTIONS = ["Arial", "Georgia", "Times New Roman", "Courier New"];
+var FONT_OPTIONS = ["Arial", "Calibri", "Georgia", "Times New Roman", "Courier New"];
 var DEFAULT_THEME = { fontFamily: "Arial", accentColor: "1D4ED8", density: "normal", baseSize: 10.5, margin: 42, headerAlign: "left", headingStyle: "rule" };
+var HIGHLIGHT = /<highlight>([\s\S]*?)<\/highlight>/gi;
+function marked(value) {
+  const source = String(value ?? "");
+  const runs = [];
+  let at = 0;
+  for (const match of source.matchAll(HIGHLIGHT)) {
+    if (match.index > at) runs.push({ text: source.slice(at, match.index), strong: false });
+    if (match[1]) runs.push({ text: match[1], strong: true });
+    at = match.index + match[0].length;
+  }
+  if (at < source.length) runs.push({ text: source.slice(at), strong: false });
+  return (runs.length ? runs : [{ text: source, strong: false }]).map((run) => ({ ...run, text: run.text.replace(/<\/?highlight>/gi, "") }));
+}
+var unmarked = (value) => String(value ?? "").replace(HIGHLIGHT, "$1").replace(/<\/?highlight>/gi, "");
 
 // src/engine.js
 var ProviderError = class extends Error {
@@ -39396,6 +39410,7 @@ function printable(value) {
 }
 var fontNames = {
   Arial: [StandardFonts.Helvetica, StandardFonts.HelveticaBold, StandardFonts.HelveticaOblique],
+  Calibri: [StandardFonts.Helvetica, StandardFonts.HelveticaBold, StandardFonts.HelveticaOblique],
   Georgia: [StandardFonts.TimesRoman, StandardFonts.TimesRomanBold, StandardFonts.TimesRomanItalic],
   "Times New Roman": [StandardFonts.TimesRoman, StandardFonts.TimesRomanBold, StandardFonts.TimesRomanItalic],
   "Courier New": [StandardFonts.Courier, StandardFonts.CourierBold, StandardFonts.CourierOblique]
@@ -39418,41 +39433,89 @@ async function canvas(theme) {
     if (y - height < margin) next();
   }
   function text(value, options = {}) {
-    const size = options.size || body, font = fonts[options.bold ? 1 : options.italic ? 2 : 0], indent = options.indent || 0;
+    const size = options.size || body, indent = options.indent || 0;
+    const base = fonts[options.bold ? 1 : options.italic ? 2 : 0];
     const available = width - indent;
-    const measure = (t) => {
+    const measure = (t, font) => {
       try {
         return font.widthOfTextAtSize(t, size);
       } catch {
         throw new Error("The built-in PDF font cannot display a character in this resume. Use text supported by the built-in Latin fonts.");
       }
     };
-    for (const paragraph of printable(value).split("\n")) {
-      const words = paragraph.split(/\s+/).filter(Boolean), lines = [];
-      let line = "";
-      for (let word of words) {
-        if (line && measure(`${line} ${word}`) > available) {
-          lines.push(line);
-          line = "";
+    const gap = (font) => measure(" ", font);
+    const spanOf = (atom) => atom.reduce((total, piece) => total + measure(piece.word, piece.font), 0);
+    const lineWidth = (atoms) => atoms.reduce((total, atom, index) => total + (index ? gap(atom[0].font) : 0) + spanOf(atom), 0);
+    const paragraphs = [[]];
+    let attached = false;
+    for (const run of marked(printable(value))) {
+      const font = run.strong ? fonts[1] : base;
+      run.text.split("\n").forEach((part, index) => {
+        if (index > 0) {
+          paragraphs.push([]);
+          attached = false;
         }
-        while (measure(word) > available && word.length > 1) {
-          let n = word.length - 1;
-          while (n > 1 && measure(word.slice(0, n)) > available) n--;
-          if (line) {
-            lines.push(line);
-            line = "";
-          }
-          lines.push(word.slice(0, n));
-          word = word.slice(n);
+        const atoms = paragraphs[paragraphs.length - 1];
+        const joins = attached && !/^\s/.test(part) && atoms.length > 0;
+        const words = part.split(/\s+/).filter(Boolean);
+        words.forEach((word, at) => {
+          if (at === 0 && joins) atoms[atoms.length - 1].push({ word, font });
+          else atoms.push([{ word, font }]);
+        });
+        attached = words.length > 0 ? !/\s$/.test(part) : attached && part.length === 0;
+      });
+    }
+    const splitAtom = (atom) => {
+      const head = [];
+      let used = 0;
+      for (let index = 0; index < atom.length; index++) {
+        const piece = atom[index];
+        const room = measure(piece.word, piece.font);
+        if (used + room <= available) {
+          head.push(piece);
+          used += room;
+          continue;
         }
-        line = line ? `${line} ${word}` : word;
+        let n = piece.word.length - 1;
+        while (n > 1 && used + measure(piece.word.slice(0, n), piece.font) > available) n--;
+        if (n >= 1) head.push({ word: piece.word.slice(0, n), font: piece.font });
+        return [head, [{ word: piece.word.slice(n), font: piece.font }, ...atom.slice(index + 1)]];
       }
-      if (line) lines.push(line);
+      return [head, []];
+    };
+    for (const atoms of paragraphs) {
+      const lines = [];
+      let line = [];
+      const close = () => {
+        if (line.length) {
+          lines.push(line);
+          line = [];
+        }
+      };
+      for (let atom of atoms) {
+        while (atom.length > 0 && spanOf(atom) > available) {
+          const [head, rest] = splitAtom(atom);
+          if (head.length === 0) break;
+          close();
+          lines.push([head]);
+          atom = rest;
+        }
+        if (atom.length === 0) continue;
+        if (line.length && lineWidth([...line, atom]) > available) close();
+        line.push(atom);
+      }
+      close();
       for (const output2 of lines) {
         ensure(size * scale2);
         const align = options.align || "left";
-        const x = align === "center" ? margin + (width - measure(output2)) / 2 : margin + indent;
-        page.drawText(output2, { x, y: y - size, size, font, color: options.color || ink });
+        let x = align === "center" ? margin + (width - lineWidth(output2)) / 2 : margin + indent;
+        for (const [index, atom] of output2.entries()) {
+          if (index) x += gap(atom[0].font);
+          for (const piece of atom) {
+            page.drawText(piece.word, { x, y: y - size, size, font: piece.font, color: options.color || ink });
+            x += measure(piece.word, piece.font);
+          }
+        }
         y -= size * scale2;
       }
     }
@@ -39547,9 +39610,11 @@ export {
   callModel,
   extractJsonObject,
   generateCoverLetter,
+  marked,
   normalizeResume,
   parseModelJson,
-  setModelTransport
+  setModelTransport,
+  unmarked
 };
 /*! Bundled license information:
 

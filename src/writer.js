@@ -37,7 +37,7 @@ import { chatGptStatus, chatGptTab, useChatGpt } from './chatgpt.js';
 import { generateResumeInChat, toResume } from './resume.js';
 import { researchCompensation } from './salary.js';
 import { profileLink } from './answers.js';
-import { applyTemplate, normalizeTemplate, documentText, FONT_OPTIONS } from './templates.js';
+import { applyTemplate, normalizeTemplate, documentText, unmarked, FONT_OPTIONS } from './templates.js';
 import { saveResume } from './store.js';
 import { record } from './spend.js';
 import {stage} from './stages.js';
@@ -120,7 +120,7 @@ async function fromFamily(held, profile, job) {
 }
 export function resumeToText(resume) {
   if (!resume) return '';
-  return [ [resume.name, resume.targetTitle].filter(Boolean).join(' - '), resume.summary, ...(resume.coreSkills || []).map(s => `${s.category}: ${s.skills.join(', ')}`), ...(resume.experience || []).flatMap(r => [r.company, r.role, `${r.startDate} - ${r.endDate}`, ...(r.bullets || []), ...(r.environment || [])]), ...Object.values(resume.education || {}) ].filter(Boolean).join('\n');
+  return unmarked([ [resume.name, resume.targetTitle].filter(Boolean).join(' - '), resume.summary, ...(resume.coreSkills || []).map(s => `${s.category}: ${s.skills.join(', ')}`), ...(resume.experience || []).flatMap(r => [r.company, r.role, `${r.startDate} - ${r.endDate}`, ...(r.bullets || []), ...(r.environment || [])]), ...Object.values(resume.education || {}) ].filter(Boolean).join('\n'));
 }
 export function checkWriterSettings(profile) {
   if (profile.chatGptProjectUrl && !/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\//i.test(profile.chatGptProjectUrl)) throw new WriterError('Enter a ChatGPT project or conversation URL, or leave it empty to use the open ChatGPT conversation.');

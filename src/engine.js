@@ -1,7 +1,7 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { z } from "zod";
-export { DEFAULT_THEME, FONT_OPTIONS } from "./templates.js";
-import { DEFAULT_THEME } from "./templates.js";
+export { DEFAULT_THEME, FONT_OPTIONS, marked, unmarked } from "./templates.js";
+import { DEFAULT_THEME, marked } from "./templates.js";
 
 export class ProviderError extends Error { constructor(message, status = 500) { super(message); this.name = "ProviderError"; this.status = status; } }
 let transport;
@@ -22,8 +22,19 @@ function printable(value) {
   const replacements = { "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-", "\u2014": "-", "\u2026": "...", "\u00a0": " " };
   return String(value || "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g,'').replace(/[\u2018\u2019\u201c\u201d\u2013\u2014\u2026\u00a0]/g, c => replacements[c]);
 }
+/**
+ * The PDF's fourteen built-in fonts, under the names people choose from.
+ *
+ * Nothing here is embedded, so the choice is between the four typefaces a
+ * reader is guaranteed to have rather than between the named fonts
+ * themselves - which is why Georgia has always drawn as Times. Calibri is
+ * a humanist sans and draws as Helvetica, the same substitution Arial has
+ * always made. Shipping the real thing would mean shipping Microsoft's
+ * font file, which is not ours to put in a zip.
+ */
 const fontNames = {
   Arial: [StandardFonts.Helvetica, StandardFonts.HelveticaBold, StandardFonts.HelveticaOblique],
+  Calibri: [StandardFonts.Helvetica, StandardFonts.HelveticaBold, StandardFonts.HelveticaOblique],
   Georgia: [StandardFonts.TimesRoman, StandardFonts.TimesRomanBold, StandardFonts.TimesRomanItalic],
   "Times New Roman": [StandardFonts.TimesRoman, StandardFonts.TimesRomanBold, StandardFonts.TimesRomanItalic],
   "Courier New": [StandardFonts.Courier, StandardFonts.CourierBold, StandardFonts.CourierOblique],
@@ -40,26 +51,96 @@ async function canvas(theme) {
   function next() { page = pdf.addPage([612, 792]); y = 792 - margin; }
   next();
   function ensure(height) { if (y - height < margin) next(); }
+  /**
+   * One value, wrapped and drawn, in as many fonts as it turns out to need.
+   *
+   * This used to pick a font once and draw each wrapped line with it,
+   * which is all a value needs when its emphasis is uniform. A highlighted
+   * word is emphasis inside a line, so a line is now a list of words each
+   * carrying the font it is drawn in, and is drawn a word at a time with x
+   * advanced by what was just written. Wrapping has to measure the same
+   * way, because a bold word is wider than the plain one beside it.
+   */
   function text(value, options = {}) {
-    const size = options.size || body, font = fonts[options.bold ? 1 : options.italic ? 2 : 0], indent = options.indent || 0;
+    const size = options.size || body, indent = options.indent || 0;
+    const base = fonts[options.bold ? 1 : options.italic ? 2 : 0];
     const available = width - indent;
-    const measure = t => { try { return font.widthOfTextAtSize(t, size); } catch { throw new Error("The built-in PDF font cannot display a character in this resume. Use text supported by the built-in Latin fonts."); } };
-    for (const paragraph of printable(value).split("\n")) {
-      const words = paragraph.split(/\s+/).filter(Boolean), lines = []; let line = "";
-      for (let word of words) {
-        if (line && measure(`${line} ${word}`) > available) { lines.push(line); line = ""; }
-        while (measure(word) > available && word.length > 1) {
-          let n = word.length - 1; while (n > 1 && measure(word.slice(0, n)) > available) n--;
-          if (line) { lines.push(line); line = ""; } lines.push(word.slice(0, n)); word = word.slice(n);
-        }
-        line = line ? `${line} ${word}` : word;
+    const measure = (t, font) => { try { return font.widthOfTextAtSize(t, size); } catch { throw new Error("The built-in PDF font cannot display a character in this resume. Use text supported by the built-in Latin fonts."); } };
+    const gap = font => measure(" ", font);
+    const spanOf = atom => atom.reduce((total, piece) => total + measure(piece.word, piece.font), 0);
+    const lineWidth = atoms => atoms.reduce((total, atom, index) => total + (index ? gap(atom[0].font) : 0) + spanOf(atom), 0);
+
+    // Paragraphs of atoms, where an atom is what must not be split up and a
+    // piece is a stretch of it in one font. The distinction exists because
+    // a tag boundary is not a word boundary: "<highlight>TypeScript</highlight>,
+    // focused on" is three runs, and treating each run's words as separate
+    // words puts a space in front of the comma. The comma is a piece of the
+    // same atom, drawn in the plain font, hard against the word before it.
+    const paragraphs = [[]];
+    let attached = false;
+    for (const run of marked(printable(value))) {
+      const font = run.strong ? fonts[1] : base;
+      run.text.split("\n").forEach((part, index) => {
+        if (index > 0) { paragraphs.push([]); attached = false; }
+        const atoms = paragraphs[paragraphs.length - 1];
+        const joins = attached && !/^\s/.test(part) && atoms.length > 0;
+        const words = part.split(/\s+/).filter(Boolean);
+        words.forEach((word, at) => {
+          if (at === 0 && joins) atoms[atoms.length - 1].push({ word, font });
+          else atoms.push([{ word, font }]);
+        });
+        attached = words.length > 0 ? !/\s$/.test(part) : attached && part.length === 0;
+      });
+    }
+
+    // An atom wider than a whole line, split into the most that fits and
+    // the rest - the long-word break the plain renderer always had, now
+    // able to cross a font change partway through.
+    const splitAtom = (atom) => {
+      const head = [];
+      let used = 0;
+      for (let index = 0; index < atom.length; index++) {
+        const piece = atom[index];
+        const room = measure(piece.word, piece.font);
+        if (used + room <= available) { head.push(piece); used += room; continue; }
+        let n = piece.word.length - 1;
+        while (n > 1 && used + measure(piece.word.slice(0, n), piece.font) > available) n--;
+        if (n >= 1) head.push({ word: piece.word.slice(0, n), font: piece.font });
+        return [head, [{ word: piece.word.slice(n), font: piece.font }, ...atom.slice(index + 1)]];
       }
-      if (line) lines.push(line);
+      return [head, []];
+    };
+
+    for (const atoms of paragraphs) {
+      const lines = [];
+      let line = [];
+      const close = () => { if (line.length) { lines.push(line); line = []; } };
+      for (let atom of atoms) {
+        while (atom.length > 0 && spanOf(atom) > available) {
+          const [head, rest] = splitAtom(atom);
+          if (head.length === 0) break;
+          close();
+          lines.push([head]);
+          atom = rest;
+        }
+        if (atom.length === 0) continue;
+        if (line.length && lineWidth([...line, atom]) > available) close();
+        line.push(atom);
+      }
+      close();
+
       for (const output of lines) {
         ensure(size * scale);
         const align = options.align || "left";
-        const x = align === "center" ? margin + (width - measure(output)) / 2 : margin + indent;
-        page.drawText(output, { x, y: y - size, size, font, color: options.color || ink }); y -= size * scale;
+        let x = align === "center" ? margin + (width - lineWidth(output)) / 2 : margin + indent;
+        for (const [index, atom] of output.entries()) {
+          if (index) x += gap(atom[0].font);
+          for (const piece of atom) {
+            page.drawText(piece.word, { x, y: y - size, size, font: piece.font, color: options.color || ink });
+            x += measure(piece.word, piece.font);
+          }
+        }
+        y -= size * scale;
       }
     }
   }

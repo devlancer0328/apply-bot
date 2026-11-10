@@ -1,6 +1,39 @@
 /** Structured templates shared by the editor, previews, prompts and PDF renderer. */
-export const FONT_OPTIONS = ["Arial", "Georgia", "Times New Roman", "Courier New"];
+export const FONT_OPTIONS = ["Arial", "Calibri", "Georgia", "Times New Roman", "Courier New"];
 export const DEFAULT_THEME = { fontFamily: "Arial", accentColor: "1D4ED8", density: "normal", baseSize: 10.5, margin: 42, headerAlign: "left", headingStyle: "rule" };
+/**
+ * <highlight>…</highlight>, as the model writes it.
+ *
+ * Asked for a resume as JSON, the model has no way to express emphasis -
+ * JSON has no bold - so it marks the words that should carry it with a
+ * tag, around a language, a tool, or a figure. Nothing read the tag, so
+ * it was drawn: bullets came out reading "built <highlight>Python</highlight>
+ * services", with the markup in the PDF sent to the employer.
+ *
+ * `marked` turns a value into the runs it is made of, which is what the
+ * PDF needs to draw part of a line in bold. `unmarked` is for everything
+ * that is not drawing it - the plain-text copy, the keyword text an ATS
+ * is matched against - where the tag is noise and the words inside it are
+ * ordinary words.
+ */
+const HIGHLIGHT = /<highlight>([\s\S]*?)<\/highlight>/gi;
+
+export function marked(value) {
+  const source = String(value ?? "");
+  const runs = [];
+  let at = 0;
+  for (const match of source.matchAll(HIGHLIGHT)) {
+    if (match.index > at) runs.push({ text: source.slice(at, match.index), strong: false });
+    if (match[1]) runs.push({ text: match[1], strong: true });
+    at = match.index + match[0].length;
+  }
+  if (at < source.length) runs.push({ text: source.slice(at), strong: false });
+  // A tag the model opened and never closed is still not text to draw.
+  return (runs.length ? runs : [{ text: source, strong: false }]).map((run) => ({ ...run, text: run.text.replace(/<\/?highlight>/gi, "") }));
+}
+
+export const unmarked = (value) => String(value ?? "").replace(HIGHLIGHT, "$1").replace(/<\/?highlight>/gi, "");
+
 export const DEFAULT_TEMPLATE = {
   id: "default", name: "Clean professional", theme: DEFAULT_THEME, showTitle: true, showLinks: true,
   sections: [
@@ -65,7 +98,8 @@ export function educationFromDocument(document) {
 
 export function documentText(document) {
   if (!document) return "";
-  return [document.name, document.targetTitle, ...Object.values(document.contact || {}).filter(v => typeof v === "string"), ...(document.sections || []).flatMap(s => [s.heading, ...(s.paragraphs || []), ...(s.lines || []).map(l => `${l.label}: ${l.text}`), ...(s.bullets || []), ...(s.roles || []).flatMap(r => [r.company, r.role, r.location, `${r.startDate} - ${r.endDate}`, ...(r.bullets || [])]), ...(s.entries || []).map(e => [e.title, e.subtitle, e.right, e.detail].filter(Boolean).join(" | "))])].filter(Boolean).join("\n");
+  // Marks taken out: this is read, matched and searched, never drawn.
+  return unmarked([document.name, document.targetTitle, ...Object.values(document.contact || {}).filter(v => typeof v === "string"), ...(document.sections || []).flatMap(s => [s.heading, ...(s.paragraphs || []), ...(s.lines || []).map(l => `${l.label}: ${l.text}`), ...(s.bullets || []), ...(s.roles || []).flatMap(r => [r.company, r.role, r.location, `${r.startDate} - ${r.endDate}`, ...(r.bullets || [])]), ...(s.entries || []).map(e => [e.title, e.subtitle, e.right, e.detail].filter(Boolean).join(" | "))])].filter(Boolean).join("\n"));
 }
 
 export function blankDocument() {
