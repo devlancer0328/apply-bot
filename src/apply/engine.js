@@ -440,11 +440,20 @@ async function keepEvidence(outcome, { browser, tabId, policy, services, request
 async function planForm(fields, { profile, context, services, call, log, company }) {
   const plan = resolveForm(fields, profile, context);
 
-  if (plan.blocked.some((entry) => entry.rule === "salary-research")) {
-    return { park: "compensation research is unavailable or uncited; no salary fallback is allowed" };
-  }
+  // A pay field with no research behind it is reported last of the three,
+  // not first. `ensureApplicationSupport` skips the research entirely once
+  // anything else on the form is blocked - correctly, since the attempt is
+  // already lost - so naming it first put the one blocker that was never
+  // attempted in front of the blocker that caused it. Thirteen of
+  // forty-two parked applications in one night read "compensation
+  // research is unavailable", and for most of them compensation was not
+  // the problem and had never been looked up.
   const demographic = plan.blocked.find((entry) => isDemographicQuestion(entry.label));
   if (demographic) return { park: `a required demographic answer needs profile review: ${demographic.reason}` };
+  const elsewhere = plan.blocked.filter((entry) => entry.rule !== "salary-research");
+  if (elsewhere.length === 0 && plan.blocked.length > 0) {
+    return { park: "compensation research is unavailable or uncited; no salary fallback is allowed" };
+  }
   if (plan.blocked.length > 0) {
     // Written down before parking, so the question that cost this
     // application is on the Questions page rather than only in the
@@ -452,8 +461,8 @@ async function planForm(fields, { profile, context, services, call, log, company
     // recorded: both are answered by a setting that already exists, and
     // putting them on the page would ask the applicant to type an answer
     // the profile is meant to hold.
-    await services.remember?.(plan.blocked.map((entry) => ({ question: entry.label, reason: entry.reason, required: true, options: entry.options ?? [], type: entry.type ?? "" })));
-    return { park: `required candidate information needs review: ${plan.blocked.map((entry) => entry.reason).join("; ")}` };
+    await services.remember?.(elsewhere.map((entry) => ({ question: entry.label, reason: entry.reason, required: true, options: entry.options ?? [], type: entry.type ?? "" })));
+    return { park: `required candidate information needs review: ${elsewhere.map((entry) => entry.reason).join("; ")}` };
   }
 
   // A menu that only renders when opened has no options in the inventory, so

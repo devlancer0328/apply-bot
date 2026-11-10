@@ -10,12 +10,33 @@ export const isPronounAnswer = value => /^(?:he\s*\/\s*him(?:\s*\/\s*his)?|she\s
 // all required, and it parked a finished application for want of it.
 const DECLINE = ['Decline to self-identify', 'Decline To Self Identify', 'Decline to State', 'Decline to Specify', "I don't wish to answer", 'I do not wish to answer', 'I do not want to answer', 'I do not wish to self-identify', "I don't wish to self-identify", 'I decline to self-identify', 'Prefer not to say', 'I prefer not to answer', 'Prefer not to disclose', 'Choose not to disclose', 'Not Declared', 'Decline to answer', "I don't wish to disclose", 'Decline'];
 const declined = value => /^(?:(?:i )?decline(?: to (?:self identify|state|specify|answer))?|(?:i )?(?:do not|don't) wish to (?:answer|disclose|self identify)|(?:i )?prefer not to (?:say|answer|disclose)|not declared)$/.test(fold(value));
+/**
+ * Every spelling of one pronoun set, longest first. The order is the
+ * preference order used when the control's entries cannot be read, where
+ * the fuller form is the more likely listing.
+ */
+const PRONOUN_SETS = {
+  he: ['He/Him/His', 'He/Him', 'He', 'Him'],
+  she: ['She/Her/Hers', 'She/Her', 'She', 'Her'],
+  they: ['They/Them/Theirs', 'They/Them', 'They', 'Them'],
+};
+
 export function chooseDemographicOption(options, candidates) {
   // Workday appends the form's country to its choice labels. That annotation
   // does not change identity; ethnic qualifiers such as "not Hispanic" do.
-  const label=value=>fold(value).replace(/\s*\((?:united states(?: of america)?|u\.?s\.?a?\.?)\)\s*$/i,'').trim();
+  // Spacing around a slash is typography, not meaning: a control offering
+  // "He / Him" and a profile holding "He/Him" are the same answer.
+  const label=value=>fold(value).replace(/\s*\/\s*/g,'/').replace(/\s*\((?:united states(?: of america)?|u\.?s\.?a?\.?)\)\s*$/i,'').trim();
   for (const candidate of candidates) {
     const match = options.find(option=>label(option.label || option.value) === label(candidate));
+    if (match) return match;
+  }
+  // "I would rather not say" is one decision with no canonical wording, and
+  // the list of spellings below will never be complete - Reddit's "I prefer
+  // not to say" is not on it. Where the applicant has declined, any entry
+  // that reads as declining is the entry they meant.
+  if (candidates.some(declined)) {
+    const match = options.find(option=>declined(option.label || option.value));
     if (match) return match;
   }
   return null;
@@ -28,7 +49,14 @@ export function demographicWordings(rule, value, profile={}) {
   const want = fold(original);
   let aliases = [];
   if (declined(original)) aliases = DECLINE;
-  else if (rule === 'gender') {
+  else if (rule === 'pronouns') {
+    // How many of a set a control lists is a house style, not a different
+    // answer: a profile saying "He/Him" against a menu of "He/him/his" is
+    // the same person, and it parked four finished applications. The
+    // subject pronoun is what identifies the set, so it chooses the set
+    // and every common spelling of it is offered.
+    aliases = PRONOUN_SETS[want.split(/[^a-z]+/)[0]] ?? [];
+  } else if (rule === 'gender') {
     if (isPronounAnswer(original)) return [];
     if (/^(male|man|cisgender man|cisgender male)$/.test(want)) aliases = ['Male', 'Man'];
     else if (/^(female|woman|cisgender woman|cisgender female)$/.test(want)) aliases = ['Female', 'Woman'];

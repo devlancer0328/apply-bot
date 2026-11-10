@@ -22,7 +22,9 @@
  */
 
 import { isCompensationQuestion, hasCompensationResearch, statedCompensationAnswer } from "./salary.js";
-import {demographicWordings,isPronounAnswer,chooseDemographicOption} from './demographics.js';
+import {demographicWordings,isDemographicQuestion,isPronounAnswer,chooseDemographicOption} from './demographics.js';
+/** The rules whose answer is a fact about the applicant rather than about the job. */
+const DEMOGRAPHIC_RULES = new Set(['pronouns','gender','race','hispanic','veteran','disability','transgender','sexual-orientation']);
 import {packAnswer,fillCompany} from './question-pack.js';
 
 const yesNoAnswer = value => value === 'yes' ? 'Yes' : value === 'no' ? 'No' : '';
@@ -490,7 +492,14 @@ const shortAnswer = (field) => field.tag !== "textarea" && field.type !== "texta
  */
 function operativeQuestion(field) {
   const label = normalise(field?.label ?? "");
-  const sentences = label.match(/[^.!?]+[.!?]?/g)?.map((part) => part.trim()).filter(Boolean) ?? [];
+  // The dots in "i.e." and "e.g." do not end a sentence. Splitting on them
+  // left Coinbase's conflict question as the list inside its own
+  // parenthesis - "child/step-child, spouse/partner, ...?" - with the
+  // question that list qualifies thrown away, and it parked two finished
+  // applications. Masked rather than special-cased in the split, so the
+  // dots come back in whichever piece they belong to.
+  const masked = label.replace(/\b(?:i\.e|e\.g|etc|vs|approx|dr|mr|mrs|ms|inc|ltd|u\.s|u\.k)\.(?=[\s,;:)]|$)/gi, (found) => found.replaceAll(".", "\u0000"));
+  const sentences = masked.match(/[^.!?]+[.!?]?/g)?.map((part) => part.trim().replaceAll("\u0000", ".")).filter(Boolean) ?? [];
   if (sentences.length <= 1) return label;
   return [...sentences].reverse().find((sentence) => sentence.endsWith("?")) ?? sentences[sentences.length - 1];
 }
@@ -727,6 +736,30 @@ const JUDGEMENT_DEFAULTS = [
     // represented by a recruiter or staffing agency for this role?"
     id: "agency-represented",
     pattern: /\b(?:represented by|working with|submitted by)\b[^|?]*\b(?:recruit(?:er|ing)|staffing|search firm|agency)\b|\bthird[- ]party (?:recruiter|agency)\b/,
+    answer: "No",
+  },
+  {
+    // The anti-bribery screen banks and exchanges put on every
+    // application: whether the applicant holds public office, or is
+    // closely related to somebody who does. Coinbase asks it four ways
+    // and parked two finished applications on all four, because it is
+    // not a fact any profile holds and the model would not invent one.
+    //
+    // It is the same shape as the conflict and financial-interest
+    // screens above. An applicant who held office would be the one
+    // person who had to correct it, and a correction costs a sentence
+    // where silence costs the application.
+    id: "government-official",
+    pattern: /\b(?:government|public|state) official\b|\bpolitically exposed person\b|\bforeign official\b|\bholder of public office\b|\bcivil service position\b/,
+    answer: "No",
+  },
+  {
+    // Healthcare and federal contractors screen for exclusion from
+    // Medicare, Medicaid and other funded programmes before anything
+    // else. Being debarred is a published, individual sanction; its
+    // absence is the ordinary state and is what this answers.
+    id: "debarment",
+    pattern: /\bdebarr?ed\b|\bexclusion list\b|\bOIG exclusion\b|\bsanctions? list\b|\b(?:excluded|ineligible)\b[^|?]*\b(?:federal|state|medicare|medicaid|government)[- ]?(?:funded |health ?care )?program/i,
     answer: "No",
   },
 ];
@@ -1164,7 +1197,15 @@ const RULES = [
     id: "previous-employment",
     // "Previously worked in a remote environment?" is not this question; the
     // guard keeps it to working for this employer.
-    pattern: /(?:previously|ever) (?:worked|been employed)|former employee|worked (?:here|for us|at this company)|current or former employee/,
+    // Hospitals ask about every prior tie, not only paid employment:
+    // HonorHealth's "externship/practicum/clinical rotation or ever
+    // volunteered" is the previous-employment question wearing the words
+    // a teaching hospital uses, and it parked a finished application.
+    // A bare "internship" is not among them on purpose: Discord asks for
+    // "a time a metric moved unexpectedly - in a job, internship,
+    // research project" and that is an essay question, not a tie to this
+    // employer.
+    pattern: /(?:previously|ever) (?:worked|been employed|volunteered|interned)|former employee|worked (?:here|for us|at this company)|current or former employee|\b(?:externship|practicum|clinical rotation)\b|\bvolunteered\b[^|?]*\b(?:at|with|for)\b/,
     when: (field) => !/\b(?:remote|hybrid|environment|industry|startup|team|role of|as an?|with)\b/i.test(field.label ?? ""),
     sensitive: true,
     value: (p, ctx) => (workedAt(ctx.company, p, ctx.resume) ? "Yes" : "No"),
@@ -1298,7 +1339,7 @@ const RULES = [
    */
   {
     id: "employee-referral",
-    pattern: /(?:hear|learn|find out) about (?:this|the|our)[^|]*\bfrom\b[^|]*\b(?:employee|team member|someone who works)\b|\b(?:were|are) you referred\b|\breferred (?:to (?:us|this)|by)\b.*\bemployee\b|\bemployee referr?al\b/,
+    pattern: /(?:hear|learn|find out) about (?:this|the|our)[^|]*\bfrom\b[^|]*\b(?:employee|team member|someone who works)\b|\b(?:were|are) you referred\b|\breferred (?:to (?:us|this)|by)\b.*\bemployee\b|\bemployee referr?al\b|\b(?:did|has|have)\b[^|?]*\b(?:employee|team member|anyone (?:here|at)|someone (?:here|at))\b[^|?]*\brefer\b/,
     when: (field) => yesNoControl(field),
     value: () => "No",
   },
@@ -1500,7 +1541,17 @@ export function resolveField(field, profile, context) {
     }
     return {outcome:'ask',question:field.label || field.name || field.id,options:field.options || [],compensation:true};
   }
-  const rule = RULES.find((entry) => entry.pattern.test(subject) && (!entry.when || entry.when(field, profile, context)));
+  const matches = (entry) => entry.pattern.test(subject) && (!entry.when || entry.when(field, profile, context));
+  let rule = RULES.find(matches);
+  // A question about the applicant's own demographics is answered from the
+  // profile's demographic facts, whatever else in the list happens to match
+  // its wording first. "Do you live with a disability (as outlined by the
+  // ADA)?" was read by the residence rule as a question about where the
+  // applicant lives, so it asked a profile that holds no such place and
+  // parked four finished applications over an answer it already had.
+  if (rule && !DEMOGRAPHIC_RULES.has(rule.id) && isDemographicQuestion(subject)) {
+    rule = RULES.find((entry) => DEMOGRAPHIC_RULES.has(entry.id) && matches(entry)) ?? rule;
+  }
 
   if (rule && rule.attach) {
     return { outcome: "attach", document: rule.attach, rule: rule.id };
@@ -1521,8 +1572,7 @@ export function resolveField(field, profile, context) {
     // A rule answers with one wording, or with several in preference order
     // for a menu whose entries it cannot see.
     const rawAnswer = rule.value(profile, context, field);
-    const answer = ['pronouns','gender','race','hispanic','veteran','disability','transgender','sexual-orientation'].includes(rule.id)
-      ? demographicWordings(rule.id, rawAnswer,profile) : rawAnswer;
+    const answer = DEMOGRAPHIC_RULES.has(rule.id) ? demographicWordings(rule.id, rawAnswer,profile) : rawAnswer;
     const wordings = Array.isArray(answer) ? answer.map((entry) => String(entry ?? "").trim()).filter(Boolean) : null;
     const wanted = wordings ? (wordings[0] ?? "") : String(answer ?? "").trim();
 
@@ -1541,7 +1591,7 @@ export function resolveField(field, profile, context) {
     // Several wordings are used as given, not expanded: expanding "Yes" into
     // "I am" would let it match the first entry of any status menu.
     const candidates = wordings ? [...new Set(wordings)] : expand(wanted);
-    const replace = ['pronouns','gender','race','hispanic','veteran','disability','transgender','sexual-orientation'].includes(rule.id) ? {replace:true} : {};
+    const replace = DEMOGRAPHIC_RULES.has(rule.id) ? {replace:true} : {};
 
     // A plain `<select>` lists its options up front, so a mismatch is knowable
     // now and worth refusing over. A react-select does not - its menu exists
