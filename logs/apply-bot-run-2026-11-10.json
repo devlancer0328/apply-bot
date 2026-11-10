@@ -1,0 +1,297 @@
+{
+  "running": false,
+  "stopping": false,
+  "total": 0,
+  "done": 0,
+  "attempted": 0,
+  "submitted": 0,
+  "targetSubmitted": 3,
+  "screened": 0,
+  "rejected": 0,
+  "review": 0,
+  "phase": "finished",
+  "aiWorkers": {
+    "configured": 2,
+    "effective": 2,
+    "busy": 1,
+    "queued": 0,
+    "completed": 4,
+    "failures": 0,
+    "reason": "",
+    "tasks": [
+      {
+        "slot": 0,
+        "startedAt": 1794280375085,
+        "label": "Web research",
+        "mode": "instant",
+        "stage": "Selecting medium mode",
+        "tabId": 1692964688,
+        "taskId": "1dac855b-2e88-4fcd-bdad-6fe9f8a1dd7e",
+        "lastProgressAt": 1794280966836,
+        "characters": 2710,
+        "retry": 3
+      }
+    ]
+  },
+  "startedAt": 1794280427839,
+  "finishedAt": 1794280843325,
+  "lastActivityAt": 1794280966836,
+  "heartbeatAt": 1794280352703,
+  "stopReason": {
+    "code": "error",
+    "message": "Run stopped: Wait for ChatGPT requests to finish before reconfiguring workers."
+  },
+  "lastError": {
+    "at": 1794280843323,
+    "message": "Stopping: Wait for ChatGPT requests to finish before reconfiguring workers."
+  },
+  "activeJobs": {},
+  "discovered": 0,
+  "discoverySource": "",
+  "feedScan": null,
+  "day": {
+    "day": "2026-11-10",
+    "target": 300,
+    "submitted": 24,
+    "attempted": 48,
+    "failed": 19,
+    "abandoned": 5,
+    "skipped": 7,
+    "discovered": 1145,
+    "remaining": 276,
+    "rate": 11.555785957954594,
+    "needed": 23.783090744291776,
+    "hoursLeft": 11.604883611111111,
+    "reasons": [
+      {
+        "reason": "pressed Submit, but no confirmation appeared",
+        "count": 7
+      },
+      {
+        "reason": "the aggregator holds no employer link for this posting",
+        "count": 6
+      },
+      {
+        "reason": "attempt abandoned after its deadline",
+        "count": 5
+      },
+      {
+        "reason": "required candidate information needs review: \"The previous question addressed ci",
+        "count": 3
+      },
+      {
+        "reason": "required candidate answers are not supported by saved facts: Please describe an ",
+        "count": 2
+      },
+      {
+        "reason": "required candidate information needs review: \"Do you now or will you in the futu",
+        "count": 1
+      },
+      {
+        "reason": "required candidate answers are not supported by saved facts: Have you previously",
+        "count": 1
+      },
+      {
+        "reason": "required candidate answers are not supported by saved facts: [Question]_Please s",
+        "count": 1
+      }
+    ],
+    "employers": [
+      {
+        "company": "Clear Street",
+        "count": 3
+      },
+      {
+        "company": "Hims And Hers",
+        "count": 3
+      },
+      {
+        "company": "Sandboxaq",
+        "count": 3
+      },
+      {
+        "company": "Snorkel AI",
+        "count": 3
+      },
+      {
+        "company": "SQUAD PL",
+        "count": 3
+      },
+      {
+        "company": "AJAIA",
+        "count": 2
+      },
+      {
+        "company": "Cadence Solutions",
+        "count": 2
+      },
+      {
+        "company": "Airbnb",
+        "count": 1
+      },
+      {
+        "company": "Directsupply",
+        "count": 1
+      },
+      {
+        "company": "SeatGeek",
+        "count": 1
+      },
+      {
+        "company": "Stratolaunch",
+        "count": 1
+      },
+      {
+        "company": "USClaro",
+        "count": 1
+      }
+    ],
+    "boards": [
+      {
+        "board": "greenhouse",
+        "count": 29
+      },
+      {
+        "board": "ashby",
+        "count": 9
+      },
+      {
+        "board": "workday",
+        "count": 4
+      },
+      {
+        "board": "lever",
+        "count": 3
+      },
+      {
+        "board": "workable",
+        "count": 2
+      },
+      {
+        "board": "rippling",
+        "count": 1
+      }
+    ],
+    "projected": 158,
+    "onTrack": false,
+    "met": false,
+    "supplyLimited": false
+  },
+  "attempts": {
+    "width": 6,
+    "busy": 0,
+    "parked": 2,
+    "queued": 0,
+    "holders": [
+      {
+        "id": 47,
+        "company": "MCK McKesson Corporation",
+        "board": "workday",
+        "stage": "Filling and verifying the application",
+        "waitingFor": "nothing; the queue stopped waiting for this attempt",
+        "parked": true,
+        "abandoned": true,
+        "forMs": 565723
+      },
+      {
+        "id": 48,
+        "company": "EQT Corporation",
+        "board": "greenhouse",
+        "stage": "Filling and verifying the application",
+        "waitingFor": "nothing; the queue stopped waiting for this attempt",
+        "parked": true,
+        "abandoned": true,
+        "forMs": 240681
+      }
+    ]
+  },
+  "stopSource": "",
+  "log": [
+    {
+      "at": 1794280427839,
+      "level": "info",
+      "message": "Apply bot 4.8.3."
+    },
+    {
+      "at": 1794280427841,
+      "level": "info",
+      "message": "18 answered question(s) loaded; forms asking them again are filled rather than held"
+    },
+    {
+      "at": 1794280842409,
+      "level": "info",
+      "message": "MCK McKesson Corporation - filled 3 of 6; slow: Will you now or in the future require im 180.0s, McKesson seeks to use Artificial intelli 180.0s, Are you legally authorized to work in th 59.0s, Are you at least 18 years old? 8.0s, Do you have any agreements with any orga 8.0s"
+    },
+    {
+      "at": 1794280842410,
+      "level": "info",
+      "message": "MCK McKesson Corporation - 3 field(s) took no value; choosing from what each actually offers",
+      "detail": [
+        "Within the last three years, have you been employed by a government entity in the United States? Government entities may be departments or agencies at the federal, state, or local level. Some examples include, but aren’t limited to: Federal: Department of Justice, Defense or Health & Human Services; CMS, CDC, Defense Health Agency, DEA and EPA or other federal agencies State: Public Universities, Prisons, Inspector General or Attorney General Offices, State Medicaid or other health care agencies Local: Cities, counties, or municipal districts, county or city-owned hospitals, public EMS, enforcement (sheriff or police departments): offers Select One / Yes, I have been employed by a government entity / No, I have not been employed by a government entity",
+        "Will you now or in the future require immigration support or sponsorship to work in the US?For purposes of the above question “immigration support or sponsorship to work in the US” means an H-1B visa petition, an O-1 visa petition, an E-3 visa petition, a F-1 STEM OPT, F-1 OPT, F-1 CPT, TN status and ‘job flexibility benefits’ (also known as I-140 portability or Adjustment of Status portability) for long-delayed adjustment of status applications that have been pending for 180 days or longer.: the menu did not open",
+        "McKesson seeks to use Artificial intelligence (AI) to accelerate the creation of insights on your application by identifying relevant skills, experiences, and qualifications. Your decision is voluntary and applies only to this job application.You may withdraw your consent at any time by contacting privacy@McKesson.com.Regardless of your decision, job applications will be evaluated by a human being (a member of McKesson’s hiring team). McKesson’s hiring team will make the hiring decisions.For more information see McKesson’s Applicant Privacy Notice.: the menu did not open"
+      ]
+    },
+    {
+      "at": 1794280842973,
+      "level": "info",
+      "message": "Writing each resume and answering each form with ChatGPT."
+    },
+    {
+      "at": 1794280842975,
+      "level": "info",
+      "message": "25 imported applications and submission markers loaded for duplicate protection."
+    },
+    {
+      "at": 1794280842975,
+      "level": "info",
+      "message": "Up to 1 role(s) per employer per day, at least 3 minute(s) apart. The same posting is never applied to twice."
+    },
+    {
+      "at": 1794280843321,
+      "level": "info",
+      "message": "Live - applications will be sent."
+    },
+    {
+      "at": 1794280843322,
+      "level": "info",
+      "message": "Today: 24 of 300 sent, 23.4 an hour needed for the rest of the day. 6 application(s) at a time, 45s between applications on one board, 3 minutes before an attempt is abandoned."
+    },
+    {
+      "at": 1794280843322,
+      "level": "warn",
+      "message": "The per-run attempt limit is 3, below today's target of 300. Each run stops at 3; set Application attempts per run to 0 to let the daily target be the only ceiling."
+    },
+    {
+      "at": 1794280843322,
+      "level": "info",
+      "message": "Taking jobs from Jobright and the job boards of employers already seen until a complete round finds no new job links, the attempt limit is reached, or Stop is pressed."
+    },
+    {
+      "at": 1794280843323,
+      "level": "error",
+      "message": "Stopping: Wait for ChatGPT requests to finish before reconfiguring workers."
+    },
+    {
+      "at": 1794280843323,
+      "level": "warn",
+      "message": "ChatGPT requests are still active; their tabs were kept open."
+    },
+    {
+      "at": 1794280843325,
+      "level": "info",
+      "message": "Finished: 0 confirmed submission(s), 0 application attempt(s), 0 screened, 0 rejected, 0 held for review; 0 discovered."
+    },
+    {
+      "at": 1794280843754,
+      "level": "info",
+      "message": "Autopilot: Run 1 ended on an error; waiting 5 minute(s) before the next one."
+    }
+  ],
+  "health": {
+    "conditions": [],
+    "freeBytes": 34999058432,
+    "screenshots": true
+  },
+  "autopilot": true
+}

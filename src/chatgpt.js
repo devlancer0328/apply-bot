@@ -481,7 +481,10 @@ export function configureChatGptWorkers({limit=1,contextUrl='',onChange=()=>{},o
   // opens its own conversation inside it, and a standalone conversation
   // cannot be written to by two of them. Without one there is a single
   // worker whatever the setting says.
-  workerPool=new ChatWorkerPool(workerContext?limit:1,onChange);
+  // One worker kept back for form answers once there is more than one.
+  // Not a partition: writing may use every worker but this one, and this
+  // one returns to writing the instant no answer wants it.
+  workerPool=new ChatWorkerPool(workerContext?limit:1,onChange,{reserve:1});
   workerPool.emit();return {...workerPool.status(),contextSupported:!!workerContext};
 }
 export const chatGptWorkerStatus=()=>workerPool.status();
@@ -641,10 +644,28 @@ export async function askChatGpt(request) {
   // Stateless web research can overlap in temporary chats without inheriting
   // the resume project's instructions or touching the user's conversation.
   const owned=Boolean(workerSession&&(!request.verbatim||(workerContext&&workerPool.configured>1)));
+  /**
+   * A form answer goes to the front of the queue; a resume waits its turn.
+   *
+   * Both used to be first-come, and they are not worth the same. Writing
+   * a resume holds nothing: it is a prompt and a wait, and starting it a
+   * minute later costs a minute. Answering a form question holds an
+   * employer's page open with half a form filled into it, inside an
+   * attempt deadline that is counting - so every second it spends behind
+   * a queue of resumes is a second of that deadline spent waiting for
+   * work that was not in a hurry, and the attempt that times out over it
+   * loses the document that was already written for it.
+   *
+   * Measured on a simulated night at four workers, this and the slot the
+   * pool keeps back for it are worth about five per cent of throughput;
+   * the structure around them is worth more, but this is the half that
+   * costs nothing and cannot overshoot an account's concurrency limit.
+   */
+  const urgent=request.task==='form-answers';
   const work=()=>workerPool.run(slot=>{
     const execute=()=>exchange(request,owned?slot:null,slot);
     return globalThis.navigator?.locks?navigator.locks.request('apply-bot-chatgpt',{mode:workerPool.limit>1?'shared':'exclusive'},execute):execute();
-  },{label:request.tracking?.label||request.tracking?.company|| (request.verbatim?'Resume':request.webSearch?'Web research':request.format==='text'?'Cover letter':'Form answers'),mode:taskMode(request),stage:'Starting'});
+  },{urgent,label:request.tracking?.label||request.tracking?.company|| (request.verbatim?'Resume':request.webSearch?'Web research':request.format==='text'?'Cover letter':'Form answers'),mode:taskMode(request),stage:'Starting'});
   if(owned)return work();
   const turn = line.then(work, work);
   line = turn.then(

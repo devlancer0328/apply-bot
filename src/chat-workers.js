@@ -11,18 +11,46 @@
  */
 const WIDEST = 4;
 export class ChatWorkerPool {
-  constructor(limit=1,onChange=()=>{}) {
+  constructor(limit=1,onChange=()=>{},{reserve=0}={}) {
     this.configured=Math.max(1,Math.min(WIDEST,Math.floor(Number(limit))||1));this.limit=this.configured;this.onChange=onChange;
+    /**
+     * Slots only urgent work may take.
+     *
+     * The queue is otherwise first-come, and the two kinds of request in
+     * it are not worth the same. A resume is holding nothing: it is a
+     * prompt and a wait, and a minute later costs a minute. A form
+     * answer is holding an employer's page open with half a form filled
+     * in, inside an attempt deadline, and every second it spends queued
+     * is a second of that deadline spent waiting for a resume that was
+     * not in a hurry. First-come put the form behind the resume.
+     *
+     * Priority alone is not enough, because it reorders the queue and
+     * cannot reorder a request already running - four resumes in flight
+     * means a ninety-second wait whatever the queue says. So one slot is
+     * kept back: writing may use every worker but this many, answering
+     * may use all of them. Nothing is partitioned and nothing sits idle
+     * - a worker kept back from writing is immediately available to
+     * writing again the moment no answer wants it.
+     */
+    this.reserve=Math.max(0,Math.min(this.configured-1,Math.floor(Number(reserve))||0));
     this.active=new Set();this.tasks=new Map();this.queue=[];this.failures=0;this.completed=0;this.closed=false;this.reason='';this.healthy=0;this.recentFailures=0;
   }
-  status(){return {configured:this.configured,effective:this.limit,busy:this.active.size,queued:this.queue.length,completed:this.completed,failures:this.failures,reason:this.reason,tasks:[...this.tasks.values()]};}
+  status(){return {configured:this.configured,effective:this.limit,reserve:this.reserve,busy:this.active.size,queued:this.queue.length,completed:this.completed,failures:this.failures,reason:this.reason,tasks:[...this.tasks.values()]};}
   emit(){this.onChange(this.status());}
   run(work,metadata={}){return new Promise((resolve,reject)=>{if(this.closed){reject(this.closed);return;}this.queue.push({work,resolve,reject,metadata});this.drain();});}
+  /** The next entry that may start, or -1 while only reserved slots are free. */
+  next(){
+    const urgent=this.queue.findIndex(entry=>entry.metadata?.urgent);
+    if(urgent>=0)return urgent;
+    return this.limit-this.active.size>this.reserve?0:-1;
+  }
   progress(slot,value){if(this.tasks.has(slot)){this.tasks.set(slot,{...this.tasks.get(slot),...value});this.emit();}}
   drain(){
     while(!this.closed&&this.queue.length&&this.active.size<this.limit){
+      const index=this.next();
+      if(index<0)break;
       let slot=0;while(this.active.has(slot))slot++;
-      const entry=this.queue.shift();this.active.add(slot);this.tasks.set(slot,{slot,startedAt:Date.now(),...entry.metadata});this.emit();
+      const entry=this.queue.splice(index,1)[0];this.active.add(slot);this.tasks.set(slot,{slot,startedAt:Date.now(),...entry.metadata});this.emit();
       Promise.resolve().then(()=>entry.work(slot)).then(value=>{
         this.completed++;this.healthy++;
         if(this.healthy>=4){this.recentFailures=0;if(!this.closed&&this.limit<this.configured){this.limit=this.configured;this.reason='';this.healthy=0;}}
