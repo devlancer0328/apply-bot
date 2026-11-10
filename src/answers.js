@@ -177,6 +177,9 @@ export function pickOption(options, target) {
 // The company's own site before "job board": landing from a search is a
 // visit to the careers page, and "Other job board" on an Ashby form opens
 // a second question asking which.
+/** The channels a "how did you hear about us" menu is built from. */
+const CHANNELS = /\blinkedin\b|\bindeed\b|\bglassdoor\b|\bziprecruiter\b|\bmonster\b|\bdice\b|\bgoogle\b|\bbing\b|\bsearch engine\b|\bjob board\b|\bcareers? (?:page|site|fair)\b|\bcompany (?:web)?site\b|\breferral\b|\brecruiter\b|\bconference\b|\bcareer fair\b|\buniversity\b|\bsocial media\b|\btwitter\b|\bfacebook\b|\binstagram\b|\bnewsletter\b|\badvertisement\b/;
+
 const HOW_HEARD_WORDINGS = ["Google", "Search Engine", "Search engine (Google, Bing, etc.)", "Online search", "Internet search", "Company website", "Careers page", "Career site", "Job Board", "LinkedIn", "Indeed", "Glassdoor", "Other"];
 
 export function expand(value) {
@@ -322,6 +325,48 @@ const METROS = {
   socal: { states: ["CA"], cities: ["los angeles", "san diego", "irvine", "santa monica", "pasadena", "long beach", "anaheim"] },
 };
 
+
+/**
+ * Single cities, which until now were the gap: every METROS entry names a
+ * region, so "are you currently based in Pittsburgh?" found no region, no
+ * state, and parked an application over a question whose answer is in the
+ * profile. Gray Swan AI asked it; bare city names are the common wording.
+ *
+ * Separate from METROS, and consulted only when the question is about
+ * where the applicant *is*, because the other question these tables answer
+ * is not symmetrical with it. "Are you based in Boston?" has one true
+ * answer for somebody in Texas. "Are you able to work from our Boston
+ * office?" does not - it depends on whether they would move, which is a
+ * thing to ask them rather than to read off a map - and that question is
+ * asked by onsite-proximity, which does not look in here.
+ *
+ * Listing a city is then safe in both directions. A city in a state the
+ * applicant is not in settles "No". A city in the state they are in
+ * settles nothing unless they live in the metro - Temple, Texas is not
+ * Austin, but it is close enough that no table should answer for them -
+ * so it parks and asks.
+ */
+const CITIES = {
+  pittsburgh: { states: ["PA"], cities: ["pittsburgh", "bethel park", "mount lebanon", "wexford", "cranberry township"] },
+  boston: { states: ["MA"], cities: ["boston", "cambridge", "somerville", "brookline", "newton", "quincy", "waltham"] },
+  seattle: { states: ["WA"], cities: ["seattle", "bellevue", "redmond", "kirkland", "tacoma", "everett"] },
+  chicago: { states: ["IL"], cities: ["chicago", "evanston", "oak park", "naperville", "schaumburg"] },
+  austin: { states: ["TX"], cities: ["austin", "round rock", "cedar park", "georgetown", "pflugerville"] },
+  dallas: { states: ["TX"], cities: ["dallas", "plano", "irving", "frisco", "arlington", "fort worth", "richardson"] },
+  houston: { states: ["TX"], cities: ["houston", "sugar land", "katy", "the woodlands", "pearland"] },
+  denver: { states: ["CO"], cities: ["denver", "boulder", "aurora", "lakewood", "englewood", "broomfield"] },
+  atlanta: { states: ["GA"], cities: ["atlanta", "decatur", "marietta", "alpharetta", "sandy springs"] },
+  philadelphia: { states: ["PA", "NJ"], cities: ["philadelphia", "camden", "cherry hill", "king of prussia", "conshohocken"] },
+  phoenix: { states: ["AZ"], cities: ["phoenix", "scottsdale", "tempe", "mesa", "chandler", "gilbert"] },
+  portland: { states: ["OR", "WA"], cities: ["portland", "beaverton", "hillsboro", "vancouver", "lake oswego"] },
+  miami: { states: ["FL"], cities: ["miami", "miami beach", "coral gables", "fort lauderdale", "hialeah"] },
+  "san diego": { states: ["CA"], cities: ["san diego", "la jolla", "carlsbad", "chula vista", "escondido"] },
+  nashville: { states: ["TN"], cities: ["nashville", "franklin", "brentwood", "murfreesboro"] },
+  minneapolis: { states: ["MN"], cities: ["minneapolis", "saint paul", "st paul", "bloomington", "edina"] },
+  "salt lake city": { states: ["UT"], cities: ["salt lake city", "provo", "lehi", "draper", "sandy", "ogden"] },
+  detroit: { states: ["MI"], cities: ["detroit", "ann arbor", "dearborn", "troy", "royal oak"] },
+};
+
 const escapeRegex = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** The profile's state as a two-letter code, whichever way it was written. */
@@ -340,7 +385,7 @@ function stateCode(state) {
  * a person, exactly as it was before this existed. The rule only ever turns
  * parks into answers where the answer is a fact.
  */
-function proximityAnswer(label, profile) {
+function proximityAnswer(label, profile, { cities = true } = {}) {
   const question = normalise(label);
   const city = normalise(profile.city);
   const state = stateCode(profile.state);
@@ -348,7 +393,8 @@ function proximityAnswer(label, profile) {
   // The applicant's own city, named in the question, settles it outright.
   if (city && new RegExp(`\\b${escapeRegex(city)}\\b`).test(question)) return "Yes";
 
-  const metro = Object.entries(METROS).find(([name]) => new RegExp(`\\b${escapeRegex(name)}\\b`).test(question))?.[1];
+  const places = cities ? { ...METROS, ...CITIES } : METROS;
+  const metro = Object.entries(places).find(([name]) => new RegExp(`\\b${escapeRegex(name)}\\b`).test(question))?.[1];
   const named = US_STATES.find((entry) => new RegExp(`\\b${entry}\\b`).test(question));
   const reaches = metro ? metro.states : named ? [STATE_CODES[named]] : null;
   if (!reaches || !state) return "";
@@ -1071,7 +1117,7 @@ const RULES = [
     when: (field) => !/sponsor|authoriz|authoris|\bvisa\b|work permit|right to work|work (?:legally|lawfully)/.test(askedSubject(field)),
     sensitive: true,
     value: (p, _ctx, field) => {
-      const here = proximityAnswer(field.label, p);
+      const here = proximityAnswer(field.label, p, { cities: false });
       if (here === "Yes") return "Yes";
       // Willing to move is a yes wherever the office turns out to be, which
       // is why it is checked before the place is: "our Boston office" names
@@ -1452,12 +1498,34 @@ const RULES = [
     when: (field) => yesNoControl(field),
     value: () => "No",
   },
+  /**
+   * The box beside a referral question, for the name.
+   *
+   * EQT's form asks whether any relative works there and then requires
+   * "Related Employee(s)" whatever the answer was. It stopped two
+   * applications with "no saved fact supports an answer", which is true
+   * and beside the point: the answer is not a fact about the applicant,
+   * it is the completion of the denial the form already has. The
+   * referral rules above answer "No" to the question this box belongs
+   * to, so leaving the box to a model that correctly refuses to invent a
+   * colleague is the gap, not the model's judgement.
+   *
+   * Only a required free-text box is taken. With a menu, the form is
+   * offering real people or real sources and the answer is in there
+   * somewhere - not something to write over with "N/A".
+   */
+  {
+    id: "referral-name",
+    pattern: /related employees?\b|\brelatives? (?:employed|who work)|names? of (?:the |any |your )?(?:relatives?|family members?|referr?er)|referr?er(?:'s)? name|who referred you/,
+    when: (field) => field.required && !field.combobox && (field.options?.length ?? 0) === 0,
+    value: () => "N/A",
+  },
   {
     id: "how-heard",
     // "Where did you first hear about this role?" went to the model, which
     // rightly had nothing to say; the "first" is what the old pattern missed.
     pattern:
-      /(?:how|where) did you (?:first |originally )?(?:hear|find|learn)|hear about (?:this|the|our) (?:role|job|position|opening|opportunity)|referr?al source|how were you referred|\bsource of (?:application|referral)\b|which (?:job )?board|(?:job )?board brought you|brought you to/,
+      /(?:how|where) did you (?:first |originally )?(?:hear|find|learn)|hear about (?:this|the|our) (?:role|job|position|opening|opportunity)|referr?al source|how were you referred|\bsource of (?:application|referral)\b|which (?:job )?board|(?:job )?board brought you|brought you to|^sources?\b/,
     /**
      * Not every question containing "hear about this role" is asking which
      * channel. "Did you hear about this opportunity from a current DailyPay
@@ -1473,6 +1541,14 @@ const RULES = [
     when: (field) => {
       const choices = (field.options ?? []).map((option) => normalise(option.label ?? option.value ?? ""));
       if (choices.length > 0 && choices.every((choice) => /^(?:yes|no)\b/.test(choice))) return false;
+      // EQT labels the same menu "Source" and nothing else, which no
+      // wording above reaches. A word that bare cannot be taken on the
+      // label alone - a source is also where a referral, a lead or a
+      // candidate came from - so it is taken on what the menu offers:
+      // two or more of the channels this question is always built from.
+      if (/^sources?\b/.test(normalise(field.label))) {
+        return choices.filter((choice) => CHANNELS.test(choice)).length >= 2;
+      }
       return !/^did you\b/.test(normalise(field.label));
     },
     // The profile's answer, then the ways a menu might word it. Workday

@@ -205,6 +205,10 @@ export async function applyTo({ request, registry, browser, services = {}, log =
       // signal than counting inputs - Workday watches its own page state -
       // and making it wait for ours first only costs it the wait.
       if (typeof adapter.inspect !== "function") await step("inspect", () => waitForForm(browser, tabId));
+      if (page === 0 && typeof adapter.inspect !== "function") {
+        const revealed = await step("inspect", () => revealForm(browser, tabId));
+        if (revealed) log("info", `${request.company} - the form was behind "${revealed}"; opened it`);
+      }
       const inspected = await step("inspect", () => call("inspect", { page }));
       // The adapter looked and found something a person has to deal with -
       // a required upload that is neither the resume nor the letter. Said
@@ -270,7 +274,7 @@ export async function applyTo({ request, registry, browser, services = {}, log =
           await rescue(unplaced, { profile, context, services, call, answers, log, company: request.company });
         }
 
-        const stillEmpty = await step("verify", () => verifyFilled(plan, { call, profile, context, services, answers, log, company: request.company }));
+        const stillEmpty = await step("verify", () => verifyFilled(plan, { call, profile, context, services, answers, log, company: request.company, onPage: inspected.fields }));
         if (stillEmpty.park) return park(stillEmpty.park);
 
         // Conditional demographics appear only after an earlier answer (race
@@ -614,7 +618,7 @@ async function rescue(fields, { profile, context, services, call, answers, log, 
  * blank. Then send it either way: a form the board refuses is reported with
  * the board's own complaint, which beats refusing it on the board's behalf.
  */
-async function verifyFilled(plan, { call, profile, context, services, answers, log, company }) {
+async function verifyFilled(plan, { call, profile, context, services, answers, log, company, onPage }) {
   let verified = await call("verify");
   if (!(verified?.empty?.length > 0)) return {};
 
@@ -635,6 +639,22 @@ async function verifyFilled(plan, { call, profile, context, services, answers, l
     verified = await call("verify");
   }
   if (verified?.empty?.length > 0) {
+    // "Sending anyway" is a fair bet on one straggler the page would not
+    // take and a guaranteed junk application on a form that took nothing
+    // at all. Airbnb's Greenhouse form, embedded in careers.airbnb.com
+    // behind a tab nobody had clicked, was read, filled with nothing,
+    // and submitted: the board refused it over all eight of its required
+    // fields. The cost is not the refusal - it is that the company was
+    // claimed for duplicate protection on the way to pressing Submit, so
+    // a posting nobody applied to is now one this will not return to.
+    //
+    // So the bet is taken only while some of the form is answered. Every
+    // required field still empty is not a straggler, it is a form that
+    // never took a value, and there is nothing to send.
+    const required = (onPage ?? []).filter((field) => field.required);
+    if (required.length > 0 && verified.empty.length >= required.length) {
+      return { park: `the form took none of its ${required.length} required answer(s); left open to fill and send by hand` };
+    }
     log("warn", `${company} - still empty after a second pass: ${verified.empty.map((field) => field.label).join(", ")}; sending anyway`);
   }
   return {};
@@ -751,6 +771,35 @@ async function settleUploads(call, timeoutMs) {
  * the form later insists the phone and the resume are missing when they are
  * plainly there. Every slow and refused form traced back to this.
  */
+/**
+ * The form behind a tab nobody had clicked.
+ *
+ * Airbnb's postings are served on careers.airbnb.com as two tabs, "Role
+ * overview" and "Application", with the Greenhouse form in an iframe under
+ * the second. Landing on the first, the fields are in the page and take no
+ * value, which read as a form that was filled with nothing and submitted
+ * anyway.
+ *
+ * Only a frame showing no form of its own is asked, and only once the
+ * fields have stopped appearing, so this never fires on a page whose form
+ * is already in front of it. A frame with nothing to fill and a control
+ * called "Application" is a frame holding the door shut.
+ */
+async function revealForm(browser, tabId) {
+  const frames = await browser.inFrame(tabId, undefined, () => {
+    const shown = (node) => node.getClientRects().length > 0;
+    if ([...document.querySelectorAll("input:not([type='hidden']), select, textarea")].some(shown)) return "";
+    const named = /^(?:application|apply|apply now|apply for this job|apply here)$/i;
+    const door = [...document.querySelectorAll('[role="tab"], button, a')].find(
+      (node) => shown(node) && node.getAttribute("aria-selected") !== "true" && named.test((node.textContent ?? "").trim()),
+    );
+    if (!door) return "";
+    door.click();
+    return (door.textContent ?? "").trim();
+  }).catch(() => []);
+  return frames.map((frame) => frame.result).find(Boolean) ?? "";
+}
+
 async function waitForForm(browser, tabId) {
   const deadline = Date.now() + FORM_SETTLE_MS;
   let previous = -1;

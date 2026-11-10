@@ -253,6 +253,56 @@ await test('the guard does not cost the genuine location questions', () => {
   }
 });
 
+// 6. Three questions that parked and did not need to.
+
+await test('a city in another state settles "are you based in X?"', () => {
+  // Gray Swan AI asked about Pittsburgh. Every metro entry named a region,
+  // so a bare city name found no region, no state, and parked.
+  const away = ask('Are you currently based in Pittsburgh?', 'Gray Swan AI', ['Yes', 'No']);
+  assert.equal(away.outcome, 'fill');
+  assert.equal(away.value, 'No');
+  assert.equal(ask('Are you currently based in Boston?', 'Gray Swan AI').value, 'No');
+  assert.equal(ask('Do you live in the Denver area?', 'Gray Swan AI').value, 'No');
+});
+
+await test('being somewhere is not the same question as getting to an office', () => {
+  // "Are you based in Boston?" has one true answer for somebody in Texas.
+  // "Can you work from our Boston office?" depends on whether they would
+  // move, which is theirs to say - so the city table settles the first and
+  // is not consulted for the second.
+  assert.equal(ask('Are you currently based in Boston?', 'Gray Swan AI').value, 'No');
+  assert.equal(ask('Are you able to work from our Boston office?', 'Gray Swan AI', ['Yes', 'No']).outcome, 'blocked');
+});
+
+await test('a city in the applicant\'s own state still asks', () => {
+  // Temple is not Austin and is close enough to it that no table should
+  // answer for them. "" parks, which is the right outcome and the reason
+  // listing cities is safe at all.
+  assert.notEqual(ask('Are you currently based in Austin?', 'Gray Swan AI').outcome, 'fill');
+});
+
+await test('EQT\'s bare "Source" menu is the how-heard question', () => {
+  const sources = ['LinkedIn Job Post', 'Indeed', 'Glassdoor', 'Employee Referral', 'EQT Careers Page', 'Recruiter', 'Other'];
+  const result = ask('Source', 'EQT Corporation', sources);
+  assert.equal(result.outcome, 'fill');
+  assert.equal(result.rule, 'how-heard');
+
+  // The label alone is never enough: a source is also where a lead or a
+  // candidate came from. Without a menu of channels it is left alone.
+  assert.notEqual(ask('Source', 'EQT Corporation', ['Inbound', 'Outbound']).rule, 'how-heard');
+  assert.notEqual(ask('Source code repository', 'EQT Corporation').rule, 'how-heard');
+});
+
+await test('EQT\'s "Related Employee(s)" completes the denial beside it', () => {
+  assert.equal(ask('Do you have any relatives employed by EQT?', 'EQT Corporation', ['Yes', 'No']).value, 'No');
+  const name = ask('Related Employee(s)', 'EQT Corporation');
+  assert.equal(name.outcome, 'fill');
+  assert.equal(name.value, 'N/A');
+
+  // Offered real names to choose from, the form knows better than "N/A".
+  assert.notEqual(ask('Related Employee(s)', 'EQT Corporation', ['Dana Reed', 'Sam Okafor']).value, 'N/A');
+});
+
 await test('a phone extension box is still left empty', () => {
   // Workday's extension box sits beside the number and is never required,
   // which is why blanking it was safe until a required field matched.
