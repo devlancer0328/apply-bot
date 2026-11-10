@@ -38,6 +38,42 @@ export function bankedJobs(jobs, { seen = new Set(), duplicate = () => false } =
 export function protectsCompany(result) {
  return ['submitted','unconfirmed'].includes(result?.status)||(result?.status==='manual'&&result.detail?.submissionAttempted!==false);
 }
+const PARKED = new Set(['manual','review','failed']);
+/**
+ * Applications a person could put back in the queue, having cleared
+ * whatever stopped them.
+ *
+ * The gate is `submissionAttempted === false` and nothing softer. Not
+ * "not true", which would let a row from an older build with no flag on
+ * it through; not the status, because `manual` covers both an
+ * application nobody sent and one that may be sitting in an applicant
+ * tracking system right now. A proven pre-submit stop is the only state
+ * where the board has nothing and a second attempt is a first attempt.
+ * This is `protectsCompany` read from the other side, and it has to stay
+ * that way: the two disagreeing is a duplicate application under the
+ * candidate's name.
+ *
+ * Questions are excluded deliberately. A posting held up by a question
+ * nobody has answered has not changed, and one whose answers have since
+ * arrived is already offered back by the bar above this one - listing it
+ * twice would be two buttons for one job.
+ *
+ * `captcha` is passed through rather than filtered on, because it is the
+ * one park this cannot read. The tab is left open for the applicant to
+ * click the puzzle and press Submit themselves, and if they do, the flag
+ * still says no submission was attempted - it is honest about what the
+ * extension did and silent about what the person did next. Only they
+ * know, so only they are asked.
+ */
+export function resumable(jobs, results) {
+ const byId = new Map((results ?? []).map(result => [String(result.id), result]));
+ return (jobs ?? [])
+  .filter(job => PARKED.has(job.stage) && !(job.blockedBy ?? []).length && job.applicationData && (job.sourceUrl || job.applyUrl))
+  .map(job => ({ job, result: byId.get(String(job.resultId)) }))
+  .filter(({ result }) => result?.detail?.submissionAttempted === false)
+  .map(({ job, result }) => ({ job, captcha: Boolean(result.detail.captcha), reason: job.reason || result.reason || '' }))
+  .sort((a, b) => (b.job.updatedAt || 0) - (a.job.updatedAt || 0));
+}
 /** Read the actual form. Optional prose must not delay a required resume. */
 export function applicationNeeds(fields=[],profile={}) {
  const editable=fields.filter(f=>!['hidden','submit','button'].includes(f.type));

@@ -16,6 +16,7 @@
  */
 import { h, head, button } from "./helpers.js";
 import { isAnswered, packSummary, triage, unblocked } from "../question-pack.js";
+import { resumable } from "../application-needs.js";
 
 /** Multiple choice where the form offered a list, free text otherwise. */
 function answerInput(entry) {
@@ -88,7 +89,42 @@ function resumeBar(jobs, pack) {
   </section>`;
 }
 
-export function questions({ questions: rows = [], jobs = [] }) {
+/**
+ * The applications that stopped on something other than a question.
+ *
+ * A list rather than a count, which is the opposite of the bar above and
+ * for the opposite reason: nobody has made a decision about these yet.
+ * The extension filled the form and stopped on a captcha, or a required
+ * field, or a demographic answer the profile has since gained - and
+ * whether that is still true is a thing only the applicant knows, one
+ * posting at a time.
+ *
+ * A captcha park gets two buttons instead of one. The tab was left open
+ * for the applicant to click the puzzle and press Submit themselves, and
+ * the record cannot tell whether they did. Sending it again when they
+ * did is a duplicate application under their name, so the question is
+ * asked rather than guessed.
+ */
+function parkedBar(parked) {
+  if (!parked.length) {
+    return `<section class="card"><h2>Stopped on something else</h2><p class="muted">No application is waiting on anything but a question. Ones that stop on a captcha, a required field or a missing profile answer appear here once nothing was sent to the employer.</p></section>`;
+  }
+  const row = ({ job, captcha, reason }) => `<div class="progress-line">
+    <strong>${h(job.company || "Employer not identified")}</strong>${job.title ? ` · ${h(job.title)}` : ""}
+    <p class="hint">${h(reason || "Stopped before anything was sent.")}</p>
+    <div class="actions">${captcha
+      ? `${button("resume-parked", "I did not finish it - try again", "primary", `data-id="${h(job.id)}"`)}${button("parked-was-sent", "I finished it myself", "quiet", `data-id="${h(job.id)}"`)}`
+      : button("resume-parked", "Queue it again", "primary", `data-id="${h(job.id)}"`)}</div>
+  </div>`;
+  const plain = parked.filter((entry) => !entry.captcha);
+  return `<section class="card"><div class="card-head"><h2>Stopped on something else</h2><span class="pill amber">${parked.length} waiting</span></div>
+    <p class="muted">Nothing reached the employer for any of these, so queueing one again is a first application rather than a second. The documents are already written - the next run sends them without paying ChatGPT twice.</p>
+    ${plain.length > 1 ? `<div class="actions">${button("resume-parked-all", `Queue all ${plain.length} that need no decision`, "primary")}</div>` : ""}
+    ${parked.map(row).join("")}
+  </section>`;
+}
+
+export function questions({ questions: rows = [], jobs = [], results = [] }) {
   const pack = Object.fromEntries(rows.map((row) => [row.key ?? row.id, row]));
   const summary = packSummary(pack);
   const sorted = triage(pack);
@@ -106,6 +142,7 @@ export function questions({ questions: rows = [], jobs = [] }) {
       <div class="stat"><small>Forms filled</small><strong>${summary.used}</strong><span>from answers you gave once</span></div>
     </div>
     ${resumeBar(jobs, Object.fromEntries(Object.entries(pack).filter(([, entry]) => isAnswered(entry))))}
+    ${parkedBar(resumable(jobs, results))}
     ${waiting.length
       ? `<h2>Waiting for an answer</h2>${waiting.map(card).join("")}`
       : `<section class="card"><h2>Nothing to answer</h2><p class="muted">Every question a form has asked has an answer. New ones appear here the moment an application stops on one.</p></section>`}

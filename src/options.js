@@ -1,5 +1,6 @@
 import {allJobs,getJob,saveJob,stateStorage,allQuestions,answerAsked,forgetQuestion,answerPack} from './store.js';
 import {unblocked} from './question-pack.js';
+import {resumable} from './application-needs.js';
 import {canonicalUrl} from './join.js';
 import {monitor,monitorBody} from './ui/monitor.js';
 import {deadline} from './deadline.js';
@@ -125,6 +126,14 @@ async function startRun() {
   await chrome.runtime.sendMessage({type:'run'});location.hash='monitor'; notify('Application run started.');
 }
 async function requireIdle() { if ((await chrome.runtime.sendMessage({type:'state'})).running) throw new Error('Stop the current run before changing applied history.'); }
+// Shared by the parked-application buttons. `documents-ready` is the
+// stage the banked-document drain reads, and clearing `resultId` drops
+// the stop that put the row here - left on, the next park would be
+// reasoned about against a stale outcome.
+async function queueParked(jobs) {
+  for (const job of jobs) await saveJob({...job,stage:'documents-ready',hold:false,resultId:'',reason:'Resumed by you after the hold was cleared.'});
+  await saveLinks([...new Set([...(await allLinks()).links,...jobs.map(job=>job.sourceUrl||job.applyUrl)])]);
+}
 async function showHistoryPreview(candidates,details = '') {
   const target = content.querySelector('#history-preview'); if(!target) return;
   const known = [...await allHistory(),...data.results.filter(r=>['submitted','unconfirmed'].includes(r.status))];
@@ -198,6 +207,7 @@ const actionHandlers = {
    * the answer in place - which is also what keeps this honest about an
    * employer who closed the role in the meantime.
    */
+  /* ---------------------------------------- putting a parked job back */
   'resume-unblocked':async()=>{
     await requireIdle();
     const ready=unblocked(await allJobs(),await answerPack());
@@ -206,6 +216,42 @@ const actionHandlers = {
     await saveLinks([...new Set([...(await allLinks()).links,...ready.map(job=>job.sourceUrl||job.applyUrl)])]);
     await renderRoute();
     notify(`${ready.length} application${ready.length===1?'':'s'} back in the queue. Start Run to send ${ready.length===1?'it':'them'}.`);
+  },
+  // Back to `documents-ready` rather than to the front of discovery: the
+  // resume, the letter and the compensation research are already on the
+  // row, and the next run's banked-document drain sends them without
+  // paying ChatGPT a second time for answers it already has.
+  'resume-parked':async target=>{
+    await requireIdle();
+    const [entry]=resumable(await allJobs(),data.results).filter(item=>item.job.id===target.dataset.id);
+    if(!entry)throw new Error('This application is no longer safe to queue again. Reload the page.');
+    await queueParked([entry.job]);
+    await renderRoute();
+    notify(`${entry.job.company||'The application'} is back in the queue. Start Run to send it.`);
+  },
+  'resume-parked-all':async()=>{
+    await requireIdle();
+    // The captcha ones are left out on purpose: each needs an answer to
+    // "did you finish it yourself", and a bulk button cannot ask.
+    const ready=resumable(await allJobs(),data.results).filter(entry=>!entry.captcha).map(entry=>entry.job);
+    if(!ready.length)throw new Error('Nothing is waiting that can be queued without a decision.');
+    await queueParked(ready);
+    await renderRoute();
+    notify(`${ready.length} application${ready.length===1?'':'s'} back in the queue. Start Run to send ${ready.length===1?'it':'them'}.`);
+  },
+  // The applicant clicked the puzzle and pressed Submit. Recorded as an
+  // application so the employer is protected from a second one - which is
+  // the whole reason this is asked rather than assumed.
+  'parked-was-sent':async target=>{
+    await requireIdle();
+    const job=await getJob(target.dataset.id);
+    const result=data.results.find(row=>String(row.id)===String(job?.resultId));
+    const applyUrl=result?.applyUrl||job?.applyUrl||job?.sourceUrl;
+    if(!applyUrl)throw new Error('This application has no link to record against.');
+    await importHistory([{...(result??{}),company:job.company,title:job.title,applyUrl,sourceUrl:job.sourceUrl,urls:historyUrls(result??{applyUrl,sourceUrl:job.sourceUrl})}]);
+    await saveJob({...job,stage:'submitted',hold:false,reason:'You finished this one yourself; it will not be applied to again.'});
+    await renderRoute();
+    notify(`${job.company||'That application'} recorded as sent by you. It is protected from a second application.`);
   },
   'hold-job':async target=>{await requireIdle();const job=await getJob(target.dataset.id);await saveJob({...job,stage:'held',hold:true,reason:'Held by you. Recheck to return it to the queue.'});await renderRoute();},
   'reload-extension':() => reloadExtension(),
