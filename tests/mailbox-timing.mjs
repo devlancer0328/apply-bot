@@ -20,6 +20,7 @@
 import assert from 'node:assert/strict';
 import { parseHTML } from 'linkedom';
 import { codeForCompany, parseRow, readRows, ROW_MINUTE_MS } from '../src/mailbox.js';
+import { providerById } from '../src/mail-providers.js';
 
 let count = 0;
 const test = (name, work) => { work(); count++; console.log(`PASS ${name}`); };
@@ -48,7 +49,7 @@ function gmail({ rows = [], box = '', hash = '', main = '' } = {}) {
   const globals = { document, location: window.location };
   const saved = Object.fromEntries(Object.keys(globals).map((key) => [key, globalThis[key]]));
   Object.assign(globalThis, globals);
-  try { return readRows(SEARCH); } finally { Object.assign(globalThis, saved); }
+  try { return readRows(SEARCH, providerById('gmail').spec); } finally { Object.assign(globalThis, saved); }
 }
 
 /* ------------------------------------------------- the settle test */
@@ -89,7 +90,7 @@ test('with no search box at all the hash is believed', () => {
   const hash = '#search/' + encodeURIComponent(SEARCH);
   const saved = { document: globalThis.document, location: globalThis.location };
   Object.assign(globalThis, { document, location: { hash } });
-  try { assert.equal(readRows(SEARCH).settled, true, 'markup that moved this far should not stall the reader'); }
+  try { assert.equal(readRows(SEARCH, providerById('gmail').spec).settled, true, 'markup that moved this far should not stall the reader'); }
   finally { Object.assign(globalThis, saved); }
   assert.ok(rows.length);
 });

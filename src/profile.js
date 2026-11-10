@@ -163,6 +163,17 @@ export const DEFAULT_PROFILE = {
   // the employer rejects it on the one fact that was knowable from the
   // start. A blank blocks nothing, because a blank is not a denial.
   securityClearance: 'none',
+  // Which webmail the verification codes are read out of: 'auto', 'gmail'
+  // or 'outlook'.
+  //
+  // Auto is right for almost everyone and wrong for exactly one case. It
+  // takes an already-open mailbox tab as the answer, and falls back to the
+  // address: outlook.com, hotmail.com, live.com and msn.com are Outlook,
+  // and everything else is Gmail. What that cannot settle is a custom
+  // domain - `daniel@acme.com` is as likely to be Microsoft 365 as Google
+  // Workspace, and nothing in the address says which - so a person on one
+  // says so here once.
+  mailProvider: 'auto',
   // The instant rules in blockers.js: postings this candidate could not
   // be hired for whatever else is true. On by default and still inert
   // until the facts above are filled in, since every rule is gated on
@@ -227,6 +238,7 @@ export const GENERIC_FILL_MODES = ['off', 'vendors', 'any'];
 /** No record stated, nothing stated, and a record the applicant will describe themselves. */
 export const CRIMINAL_RECORD = ['none', '', 'disclose'];
 export const APPLY_ENGINES = ['module', 'legacy'];
+export const MAIL_PROVIDERS = ['auto', 'gmail', 'outlook'];
 export const RESUME_REUSE = ['family', 'posting'];
 export function withDefaults(stored = {}) {
   const value = Object.fromEntries(Object.keys(DEFAULT_PROFILE).map(key => [key, stored?.[key] ?? DEFAULT_PROFILE[key]]));
@@ -234,6 +246,7 @@ export function withDefaults(stored = {}) {
   if (!MANUAL_MODES.includes(value.manualMode)) value.manualMode = 'list';
   if (!GENERIC_FILL_MODES.includes(value.genericFill)) value.genericFill = 'off';
   if (!APPLY_ENGINES.includes(value.applyEngine)) value.applyEngine = 'module';
+  if (!MAIL_PROVIDERS.includes(value.mailProvider)) value.mailProvider = 'auto';
   if (!RESUME_REUSE.includes(value.resumeReuse)) value.resumeReuse = 'family';
   for (const key of ['manualLimit', 'techYears', 'delayMs', 'maxPerRun']) value[key] = Math.max(0, Number(value[key]) || 0);
   // Four, because each worker keeps a ChatGPT tab per kind of task and

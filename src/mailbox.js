@@ -1,29 +1,27 @@
 /**
- * Reads a security code out of the applicant's Gmail.
+ * Reads a security code out of the applicant's mailbox.
  *
  * Some Greenhouse boards hold an application after Submit until the applicant
  * types a code that was mailed to them. The mail comes from Greenhouse's own
  * sender - no-reply@us.greenhouse-mail.io on American boards and
  * no-reply@eu.greenhouse-mail.io on European ones - with the subject
  * "Security code for your application to <Company>" and the code in the first
- * sentence of the body, which is also the snippet Gmail shows in its list. So
- * the list is enough: the mailbox is opened on a search for those mails, and
- * the row for this company is read without opening it.
+ * sentence of the body, which is also the snippet both webmail clients show
+ * in their list. So the list is enough: the mailbox is opened on a search for
+ * those mails, and the row for this company is read without opening it.
  *
- * The search is keyed on that subject rather than on the sender, because the
- * subject is the part that has held still. The sending domain already differs
- * by region and has moved before, and when it moves this search does not
- * break loudly - it returns an empty list, which reads exactly like a code
- * that has not arrived yet, and the application sits waiting for a person.
- * The sender is kept beside the subject as an alternative rather than a
- * requirement, so neither key alone can empty the list.
+ * Gmail and Outlook are both read, and which one is a question for
+ * `pickProvider` rather than for anything here. The selectors and the
+ * search dialect live in mail-providers.js; what is left in this file is
+ * the part that is the same either way - which mail belongs to this
+ * application, and what to do while waiting for it.
  *
- * This is screen-reading, not an API. Gmail's markup is undocumented and
- * changes, so the selectors here are the ones that have been stable for
- * years (the row class, the conversation count) and the text of a row is
- * read whole rather than cell by cell. The alternative - Google's API with an
- * OAuth client - would need a Cloud project per user, which is more setup
- * than anyone installing an extension will do.
+ * This is screen-reading, not an API. Webmail markup is undocumented and
+ * changes, so the selectors used are the ones that have been stable for
+ * years and the text of a row is read whole rather than cell by cell. The
+ * alternative - Google's API with an OAuth client, or Microsoft Graph with
+ * an app registration - would need a cloud project per user, which is more
+ * setup than anyone installing an extension will do.
  *
  * ## Why a row's time is read as well as its text
  *
@@ -41,16 +39,47 @@
  * So matching on the company is necessary and is not sufficient. A code is
  * only this application's if the mail carrying it was sent after this
  * application was: `codeForCompany` is the single place that decides, both
- * readers go through it, and it refuses rather than guesses.
+ * readers go through it, and it refuses rather than guesses. That is also
+ * what lets Outlook's coarser search in: its dialect can only bound by the
+ * day, and the bound was never what kept a stale code out.
  */
 
 import { focus, findTab } from "./tabs.js";
+import {
+  PROVIDERS,
+  clearSearch,
+  clickRefresh,
+  goToHash,
+  inboxUrl,
+  openWorkdayRow,
+  pickProvider,
+  providerById,
+  readRows,
+  readWorkdayMessage,
+  searchFor,
+  typeSearch,
+} from "./mail-providers.js";
 
-export const SEARCH = '{subject:"security code for your application" from:greenhouse-mail.io} newer_than:2h';
-// A row reads "Greenhouse, Security code for your application to Scale AI,
-// has attachment, 4:32 PM, Greenhouse Recruiting. Copy and paste this code
-// into the security code field on your application: 06053840. After ..."
-const SUBJECT = /security code for your application to\s+([^,]+?)\s*(?:,|$)/i;
+// Re-exported under the names three tests, background.js and
+// apply/verification.js already import. The page functions are the
+// fragile part and there is one copy of each; this is only where they
+// are reached from.
+export { clickRefresh, goToHash, openWorkdayRow, readRows, readWorkdayMessage };
+
+export const SEARCH = searchFor(providerById("gmail"), "code");
+// A Gmail row reads "Greenhouse, Security code for your application to
+// Scale AI, has attachment, 4:32 PM, Greenhouse Recruiting. Copy and paste
+// this code into the security code field on your application: 06053840.
+// After ..." - cells separated by commas, which is where the company name
+// used to be taken to end.
+//
+// Outlook's row is spans rather than cells and they abut, so its text runs
+// "...application to Scale AICopy and paste this code into..." with no
+// comma anywhere. Reading to the next comma then swallowed the whole body
+// into the company name. So the body's own opening is a boundary too: the
+// sentence Greenhouse puts first is the snippet both clients show, and it
+// is the one thing guaranteed to follow the subject.
+const SUBJECT = /security code for your application to\s+(.+?)\s*(?:,|\.|$|(?=copy and paste))/i;
 // Eight characters, which is what Greenhouse sends and what its own form
 // asks for in as many words ("enter the 8-character code"). The looser
 // six-to-ten this used to allow matched nothing real that eight does not,
@@ -71,24 +100,28 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const ROW_MINUTE_MS = 90000;
 
 /** Where to look. The address picks the account when several are signed in. */
-export function mailboxUrl(email) {
+export function mailboxUrl(email, provider = pickProvider({ email })) {
+  if (provider.id !== "gmail") return inboxUrl(provider, email);
   const account = email ? `?authuser=${encodeURIComponent(email)}` : "";
-  return `https://mail.google.com/mail/${account}#search/${encodeURIComponent(SEARCH)}`;
+  return `https://mail.google.com/mail/${account}#search/${encodeURIComponent(searchFor(provider, "code"))}`;
 }
 
 /* ------------------------------------------------- the mailbox tab */
 
 /**
- * Gmail is slow to start - ten to twenty seconds of loading on a fresh tab -
- * which is most of the wait at a verification step. So the user keeps Gmail
- * open in the Gmail tab of the browser, and the search runs in that tab by
- * changing its hash: Gmail answers a hash change in a second or two without
- * reloading. The tab is handed back on the view it was on when done.
+ * A webmail client is slow to start - ten to twenty seconds of loading on a
+ * fresh tab - which is most of the wait at a verification step. So the user
+ * keeps the mailbox open in a tab, and the search runs in that tab: Gmail
+ * answers a hash change in a second or two without reloading, and Outlook
+ * answers a query typed into its own search box just as quickly. The tab is
+ * handed back on the view it was on when done.
  *
- * Only when no Gmail tab is open does a fresh one get opened, as before.
+ * Only when no mailbox tab is open does a fresh one get opened, as before.
+ * Which client that is, when there is nothing open to tell us, is
+ * `pickProvider`'s question.
  */
-async function gmailTab() {
-  return findTab(["https://mail.google.com/*"], tab => !tab.discarded);
+async function openTabFor(provider) {
+  return findTab(provider.patterns, (tab) => !tab.discarded);
 }
 
 function runIn(tabId, func, args = []) {
@@ -99,37 +132,21 @@ function runIn(tabId, func, args = []) {
 }
 
 /**
- * Moves Gmail to a view in place. Runs inside the page.
+ * Showing a search, and putting the view back, in whichever client this is.
  *
- * This and the four page functions below are exported for the apply
- * module's own reader (apply/verification.js), which runs the same
- * screen-reading one short foreground turn at a time instead of holding the
- * front for the whole wait. Gmail's markup is the fragile part and there is
- * no reason to have two guesses at it, so the port took the polling
- * structure and left these where they are.
+ * Gmail routes on the hash so a search is a URL; Outlook has no such URL
+ * and its search is a control, so the query is typed into the box and
+ * entered. This is the only behaviour the two clients do not share, which
+ * is why it is the only thing switched on here rather than described in a
+ * spec.
  */
-export function goToHash(hash) {
-  if (location.hash === hash) {
-    // The same hash again is ignored, so bounce through the inbox.
-    location.hash = "#inbox";
-    setTimeout(() => {
-      location.hash = hash;
-    }, 150);
-  } else {
-    location.hash = hash;
-  }
-  return true;
-}
+const showSearch = (tabId, provider, search) =>
+  provider.id === "gmail"
+    ? runIn(tabId, goToHash, [`#search/${encodeURIComponent(search)}`])
+    : runIn(tabId, typeSearch, [search, provider.spec.box]);
 
-/** Asks Gmail to re-run the current view. Runs inside the page. */
-export function clickRefresh() {
-  const button = [...document.querySelectorAll('[role="button"]')].find((node) =>
-    /^refresh$/i.test(node.getAttribute("aria-label") ?? node.getAttribute("data-tooltip") ?? ""),
-  );
-  if (!button) return false;
-  button.click();
-  return true;
-}
+const restoreView = (tabId, provider, previous) =>
+  provider.id === "gmail" ? runIn(tabId, goToHash, [previous || "#inbox"]) : runIn(tabId, clearSearch, [provider.spec.box]);
 
 /**
  * The tab the mail is read in, with the search showing.
@@ -137,9 +154,17 @@ export function clickRefresh() {
  * `release` puts the tab back: a borrowed tab is returned to the view it was
  * on, a tab opened here is closed.
  */
-async function openMailbox({ email, search, openTab, closeTab, log }) {
-  const hash = `#search/${encodeURIComponent(search)}`;
-  const borrowed = await gmailTab();
+async function openMailbox({ email, provider, search, openTab, closeTab, log }) {
+  const borrowed = await openTabFor(provider);
+  const controls = (tabId, release) => ({
+    tabId,
+    provider,
+    show: () => showSearch(tabId, provider, search),
+    refresh: async () => {
+      if (!(await runIn(tabId, clickRefresh, [provider.spec.refresh]))) await showSearch(tabId, provider, search);
+    },
+    release,
+  });
 
   if (borrowed) {
     const previous = (() => {
@@ -150,19 +175,11 @@ async function openMailbox({ email, search, openTab, closeTab, log }) {
       }
     })();
     await focus(borrowed.id);
-    await runIn(borrowed.id, goToHash, [hash]);
-    return {
-      tabId: borrowed.id,
-      show: () => runIn(borrowed.id, goToHash, [hash]),
-      refresh: async () => {
-        if (!(await runIn(borrowed.id, clickRefresh))) await runIn(borrowed.id, goToHash, [hash]);
-      },
-      release: () => runIn(borrowed.id, goToHash, [previous]),
-    };
+    await showSearch(borrowed.id, provider, search);
+    return controls(borrowed.id, () => restoreView(borrowed.id, provider, previous));
   }
 
-  log?.("info", "Gmail is not open in a tab; opening one. Keep Gmail open in the Gmail tab to make this faster");
-  const account = email ? `?authuser=${encodeURIComponent(email)}` : "";
+  log?.("info", `${provider.name} is not open in a tab; opening one. Keep ${provider.name} open in a tab to make this faster`);
   // Opened on the inbox and moved to the search afterwards, never started on
   // the search itself. Gmail booted straight onto a search hash runs the
   // search but never fills its own search box, and that box is the only
@@ -170,30 +187,25 @@ async function openMailbox({ email, search, openTab, closeTab, log }) {
   // A tab opened the other way therefore never reads as settled: every look
   // waits out all forty tries and then uses the rows anyway, which turned
   // one look into forty seconds and spent most of the code's budget on it.
-  const tabId = await openTab(`https://mail.google.com/mail/${account}#inbox`);
-  await drawn(tabId);
-  await runIn(tabId, goToHash, [hash]);
-  return {
-    tabId,
-    show: () => runIn(tabId, goToHash, [hash]),
-    refresh: async () => {
-      if (!(await runIn(tabId, clickRefresh))) await runIn(tabId, goToHash, [hash]);
-    },
-    release: () => closeTab(tabId),
-  };
+  const tabId = await openTab(inboxUrl(provider, email));
+  await drawn(tabId, provider);
+  await showSearch(tabId, provider, search);
+  return controls(tabId, () => closeTab(tabId));
 }
 
 /**
- * Waits for a newly opened Gmail to finish drawing.
+ * Waits for a newly opened mailbox to finish drawing.
  *
  * A hash set while Gmail is still starting is set on a page whose router is
- * not listening yet, so it is simply lost and the tab stays on the inbox.
- * Asking for the rows with no search is the same readiness test the reader
- * already uses, with the part about which view it is left out.
+ * not listening yet, so it is simply lost and the tab stays on the inbox;
+ * a query typed into an Outlook search box that has not been built yet goes
+ * nowhere at all. Asking for the rows with no search is the same readiness
+ * test the reader already uses, with the part about which view it is left
+ * out.
  */
-async function drawn(tabId) {
+async function drawn(tabId, provider) {
   for (let i = 0; i < 30; i++) {
-    if ((await runIn(tabId, readRows, [""]))?.settled) return true;
+    if ((await runIn(tabId, readRows, ["", provider.spec]))?.settled) return true;
     await wait(1000);
   }
   return false;
@@ -204,20 +216,20 @@ async function drawn(tabId) {
  *
  * `looks` is the whole budget and it shrinks after the first one. Waiting
  * forty seconds is right for a view that has not drawn yet and wrong for
- * every look after that: by then Gmail is up and showing this search, and
- * a refresh it answers in a second was being given the cold-start budget
- * every time round the loop. With a look costing forty seconds and the
- * pause between looks four, a two-and-a-half minute wait bought three
+ * every look after that: by then the client is up and showing this search,
+ * and a refresh it answers in a second was being given the cold-start
+ * budget every time round the loop. With a look costing forty seconds and
+ * the pause between looks four, a two-and-a-half minute wait bought three
  * sights of the mailbox.
  */
 export const SETTLE_FIRST = 40;
 export const SETTLE_AFTER = 12;
 
-async function settledList(tabId, search, signedOutMessage, looks = SETTLE_FIRST) {
+async function settledList(tabId, provider, search, signedOutMessage, looks = SETTLE_FIRST) {
   let page = null;
   for (let i = 0; i < looks && !page?.settled && !page?.failure; i++) {
     await wait(i === 0 ? 400 : 1000);
-    page = await runIn(tabId, readRows, [search]);
+    page = await runIn(tabId, readRows, [search, provider.spec]);
     if (page?.signedOut) throw new Error(signedOutMessage);
   }
   return page;
@@ -257,83 +269,6 @@ export function namesMatch(subjectCompany, candidates) {
 }
 
 const words = (name) => normalize(name).split(" ").filter(Boolean);
-
-/** The rows of a Gmail list, as this module reads them. Runs inside the page. */
-export function readRows(search) {
-  const signedOut = /accounts\.google\.com/.test(location.href);
-  // When the mail was sent, which decides whether its code belongs to this
-  // application or to the last one at the same employer. The visible cell
-  // says "4:32 PM" with no date; the full date is in that cell's tooltip,
-  // and a year is what tells it apart from the sender name and the
-  // attachment marker, which carry tooltips of their own on the same row.
-  //
-  // Falling back to the visible cell matters more than it looks. A row
-  // whose time cannot be read is not merely undated: `codeForCompany`
-  // then falls back to "was this code in the box when the wait began",
-  // and the wait begins after Submit while Greenhouse mails the code
-  // within a second or two of it. So a code that arrived promptly - the
-  // normal case - gets recorded as having been there all along and is
-  // then refused for the whole seven minutes. That is the shape of a
-  // code the reader never finds at all, and it depends entirely on one
-  // undocumented tooltip.
-  const timeOf = (row) => {
-    for (const node of row.querySelectorAll("[title], [aria-label]")) {
-      for (const value of [node.getAttribute("title"), node.getAttribute("aria-label")]) {
-        if (!value || !/\b(?:19|20)\d{2}\b/.test(value)) continue;
-        // "Mon, Nov 9, 2026 at 4:32 PM" is one of the spellings Gmail uses
-        // and the one spelling Date.parse refuses, over the word "at".
-        const at = Date.parse(value) || Date.parse(value.replace(/\bat\b/i, ","));
-        if (at) return at;
-      }
-    }
-    // The date cell itself, which is the last cell of the row and the most
-    // stable thing in it. Today's mail reads "4:32 PM"; anything older
-    // reads "Nov 8", which is all this needs to know - a code from another
-    // day is never this application's.
-    const shown = String(row.querySelector("td:last-child")?.textContent ?? row.textContent.split(/\s+/).slice(-3).join(" ")).trim();
-    const clock = shown.match(/\b(\d{1,2}):(\d{2})\s*([AaPp])?\.?[Mm]?\.?\b/);
-    if (clock) {
-      const hour = Number(clock[1]) % 12 + (/[Pp]/.test(clock[3] ?? "") ? 12 : 0);
-      const today = new Date();
-      today.setHours(clock[3] ? hour : Number(clock[1]), Number(clock[2]), 0, 0);
-      return today.getTime();
-    }
-    // A bare day and month: older than today, so dated to the start of
-    // that day, which is early enough to be refused by any `since`.
-    const day = Date.parse(`${shown} ${new Date().getFullYear()}`);
-    return day && day <= Date.now() ? day : 0;
-  };
-  // Gmail keeps the lists of views it has shown in the page, hidden, so a
-  // tab that was on the inbox still holds those rows; only what is on
-  // screen is the search.
-  const rows = [...document.querySelectorAll("tr.zA")]
-    .filter((row) => row.getClientRects().length > 0)
-    .map((row) => ({ text: row.textContent.replace(/\s+/g, " ").trim(), at: timeOf(row) }));
-  const main = document.querySelector('[role="main"]')?.textContent ?? "";
-  // A tab moved here from the inbox still shows the inbox for a moment, so
-  // the list only counts once Gmail has put this search in its box.
-  //
-  // Matched on the query's plain words rather than on its first
-  // space-delimited token, which for the code search is `{subject:"security`
-  // - a string Gmail never shows, because it rewrites what it puts in the
-  // box: the operator syntax becomes chips, quoting and spacing move, and
-  // the braces of an OR group do not survive at all. So this test could
-  // not pass, nothing ever read as settled, and every look at the mailbox
-  // spent its whole forty-second budget before using the rows anyway. On a
-  // two-and-a-half minute wait that is three looks instead of thirty, and
-  // it is most of why a code that had arrived was found late or not at all.
-  const box = document.querySelector('form[role="search"] input, input[name="q"], input[aria-label="Search mail"], input[aria-label^="Search"]');
-  const terms = String(search ?? "").toLowerCase().match(/[a-z]{4,}/g) ?? [];
-  const typed = String(box?.value ?? "").toLowerCase();
-  // No box at all is markup that has moved further than this function can
-  // follow; the hash is what was asked for and is the honest fallback.
-  const searching = !search || !terms.length || (box ? terms.some((term) => typed.includes(term)) : decodeURIComponent(location.hash || "").toLowerCase().includes(terms[0]));
-  // The frame of the page is up long before the search has answered, so
-  // "loaded" means the list has rows or Gmail has said there are none.
-  const settled = searching && (rows.length > 0 || /no messages matched|nothing matched|no results/i.test(main));
-  const failure = /temporary error|something went wrong/i.test(document.body?.textContent?.slice(0, 2000) ?? "");
-  return { signedOut, settled, failure, rows };
-}
 
 /** A row as a piece of mail: who it names, the code in it, when it was sent. */
 export function parseRow(row) {
@@ -391,8 +326,9 @@ export function codeForCompany(rows, { names, since = 0, used = new Set(), seen 
  * `codeForCompany` wants both, and between them a code can neither be
  * typed twice nor be one that predates the submission.
  */
-export async function fetchSecurityCode({ email, company, board, used, submittedAt, openTab, closeTab, log, timeoutMs = 150000 }) {
-  const mailbox = await openMailbox({ email, search: SEARCH, openTab, closeTab, log });
+export async function fetchSecurityCode({ email, company, board, used, submittedAt, openTab, closeTab, log, provider = pickProvider({ email }), timeoutMs = 150000 }) {
+  const search = searchFor(provider, "code");
+  const mailbox = await openMailbox({ email, provider, search, openTab, closeTab, log });
   const { tabId } = mailbox;
   const since = (submittedAt ?? Date.now()) - ROW_MINUTE_MS;
   const seen = new Set();
@@ -402,10 +338,10 @@ export async function fetchSecurityCode({ email, company, board, used, submitted
   try {
     while (Date.now() < deadline) {
       attempt += 1;
-      const page = await settledList(tabId, SEARCH, "Gmail is not signed in on this browser, so the code cannot be read", attempt === 1 ? SETTLE_FIRST : SETTLE_AFTER);
+      const page = await settledList(tabId, provider, search, `${provider.name} is not signed in on this browser, so the code cannot be read`, attempt === 1 ? SETTLE_FIRST : SETTLE_AFTER);
 
       if (page?.failure) {
-        log?.("warn", "Gmail showed an error page; retrying");
+        log?.("warn", `${provider.name} showed an error page; retrying`);
       } else {
         const rows = page?.rows ?? [];
         if (attempt === 1) for (const mail of rows.map(parseRow).filter(Boolean)) seen.add(mail.code);
@@ -456,68 +392,28 @@ export async function fetchSecurityCode({ email, company, board, used, submitted
  * the sender is kept as an alternative so neither key alone can empty the
  * list.
  */
-export const WORKDAY_SEARCH = '{subject:"verify your candidate account" from:otp.workday.com} newer_than:3h';
+export const WORKDAY_SEARCH = searchFor(providerById("gmail"), "workday");
 
-/** The activation link or code in an opened message. Runs inside the page. */
-export function readWorkdayMessage(host) {
-  const links = [...document.querySelectorAll('[role="main"] a[href]')]
-    .map((anchor) => anchor.href)
-    .filter((href) => /\/activate\//i.test(href) && href.toLowerCase().includes(host.toLowerCase()));
-  const body = document.querySelector('[role="main"]')?.innerText ?? "";
-  const code = body.match(/\b(?:code|passcode)\b[^\d]{0,40}(\d{6,8})\b/i)?.[1] ?? "";
-  return { link: links[0] ?? "", code, opened: Boolean(document.querySelector('[role="main"] .a3s, [role="main"] [data-message-id]')) };
-}
-
-/**
- * Clicks the nth verification row, preferring the ones that name this
- * tenant. Runs inside the page.
- *
- * The name on the row is the sender's display name, and it is the tenant's
- * branding rather than the tenant's slug in the address: "OneSource
- * Virtual" for `vhr-osvhr`, "Highmark Health" for `highmarkhealth`. So the
- * caller passes every name the mail might carry and a row matching any of
- * them wins - but a row matching none is still offered, in order, because
- * a tenant whose branding matches nothing we know is exactly the case
- * where refusing to look costs the whole application. What makes that safe
- * is `readWorkdayMessage`, which only accepts a link on the host being
- * applied to: an unnamed row is a guess the opened message then has to
- * confirm. `named` says which of the two happened, so a caller can refuse
- * a bare code - the one payload with no host in it to check - off a row
- * nobody vouched for.
- */
-export function openWorkdayRow(names, index = 0) {
-  const wanted = [].concat(names).map((name) => String(name ?? "").toLowerCase()).filter((name) => name.length >= 3);
-  const rows = [...document.querySelectorAll("tr.zA")].filter((row) => row.getClientRects().length > 0);
-  const verification = rows.filter((row) => /verify|activate|verification|code|confirm/i.test(row.textContent));
-  const mine = verification.filter((row) => wanted.some((name) => row.textContent.toLowerCase().includes(name)));
-  // Gmail lists newest first, so index 0 is the mail this attempt just
-  // caused and anything below it belongs to an earlier one.
-  const named = mine.length > 0;
-  const row = (named ? mine : verification)[index];
-  if (!row) return { clicked: false, rows: rows.length, candidates: verification.length };
-  row.click();
-  return { clicked: true, named, rows: rows.length, candidates: (named ? mine : verification).length, text: row.textContent.replace(/\s+/g, " ").slice(0, 200) };
-}
-
-export async function fetchWorkdayActivation({ email, host, openTab, closeTab, log, timeoutMs = 180000 }) {
+export async function fetchWorkdayActivation({ email, host, openTab, closeTab, log, provider = pickProvider({ email }), timeoutMs = 180000 }) {
   const tenant = String(host).split(".")[0];
-  const mailbox = await openMailbox({ email, search: WORKDAY_SEARCH, openTab, closeTab, log });
+  const search = searchFor(provider, "workday");
+  const mailbox = await openMailbox({ email, provider, search, openTab, closeTab, log });
   const { tabId } = mailbox;
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
   try {
     while (Date.now() < deadline) {
       attempt += 1;
-      const page = await settledList(tabId, WORKDAY_SEARCH, "Gmail is not signed in on this browser, so the account mail cannot be read", attempt === 1 ? SETTLE_FIRST : SETTLE_AFTER);
+      const page = await settledList(tabId, provider, search, `${provider.name} is not signed in on this browser, so the account mail cannot be read`, attempt === 1 ? SETTLE_FIRST : SETTLE_AFTER);
       if (page?.failure) {
-        log?.("warn", "Gmail showed an error page; retrying");
+        log?.("warn", `${provider.name} showed an error page; retrying`);
       } else {
-        const opened = await runIn(tabId, openWorkdayRow, [tenant, 0]);
+        const opened = await runIn(tabId, openWorkdayRow, [tenant, 0, provider.spec.rows]);
         if (opened?.clicked) {
           let message = null;
           for (let i = 0; i < 12; i++) {
             await wait(700);
-            message = await runIn(tabId, readWorkdayMessage, [host]);
+            message = await runIn(tabId, readWorkdayMessage, [host, provider.spec.message, provider.spec.opened]);
             if (message?.link || message?.code) break;
           }
           if (message?.link) return { link: message.link };

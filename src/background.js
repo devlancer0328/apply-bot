@@ -36,6 +36,7 @@ import {BUILD_VERSION,DATABASE_PROTOCOL} from './update.js';
 import { isHiringCafeSearch, searchPage } from "./hiringcafe.js";
 import { recommendedJobs } from "./jobright.js";
 import { createVerificationService } from "./apply/verification.js";
+import { ALL_PATTERNS } from "./mail-providers.js";
 import { OUTCOMES } from "./apply/contract.js";
 import { chromeBrowserOps } from "./apply/chrome-ops.js";
 import { applyThroughModule, forgetBoardTrials, moduleEngine } from "./apply/run-bridge.js";
@@ -2430,7 +2431,15 @@ const mailOps = {
   closeTab,
   inFrame: (tabId, frameId, func, args = []) => atFront(() => chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN", func, args }).then((results) => results[0]?.result)),
 };
-const mailbox = createVerificationService({ browser: mailOps, log, used: usedCodes });
+const mailbox = createVerificationService({
+  browser: mailOps,
+  log,
+  used: usedCodes,
+  // Read per wait rather than captured once: the setting is on the profile
+  // page, and a person who changes it mid-run means it for the next
+  // application rather than for tomorrow.
+  stated: () => readProfile().then((profile) => profile.mailProvider).catch(() => "auto"),
+});
 
 /**
  * An attempt running outside the slot pool - the standalone paths, and the
@@ -2799,11 +2808,11 @@ async function treatConditions() {
  * the attempt being interrupted was going to time out anyway.
  */
 async function reloadMailbox() {
-  const tabs = await chrome.tabs.query({ url: "https://mail.google.com/*" }).catch(() => []);
+  const tabs = (await Promise.all(ALL_PATTERNS.map((url) => chrome.tabs.query({ url }).catch(() => [])))).flat();
   for (const tab of tabs) await chrome.tabs.reload(tab.id).catch(() => {});
   log("warn", tabs.length
-    ? `The mailbox is not answering with codes, so Gmail has been reloaded. If the next few applications still find nothing, the day stops and waits for you to sign in.`
-    : `The mailbox is not answering with codes and no Gmail tab is open; the next application that needs a code will open one.`);
+    ? `The mailbox is not answering with codes, so it has been reloaded. If the next few applications still find nothing, the day stops and waits for you to sign in.`
+    : `The mailbox is not answering with codes and no mailbox tab is open; the next application that needs a code will open one.`);
 }
 
 /** What happens after this run, decided the moment it ends and written down. */

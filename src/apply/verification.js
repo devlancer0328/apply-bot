@@ -7,7 +7,7 @@
  * Two boards stop an application until the applicant proves the address:
  * Greenhouse mails an eight-digit security code after Submit, and Workday
  * mails an activation link before the wizard will open at all. The old flow
- * read both out of Gmail, and read them like this:
+ * read both out of the applicant's mailbox, and read them like this:
  *
  *     code = await atFront(() => fetchSecurityCode({ ... }))   // 150s
  *     mail = await atFront(() => fetchWorkdayActivation({ ... })) // 180s
@@ -66,18 +66,20 @@
  * fragile part cannot drift into two versions.
  */
 
+import { ROW_MINUTE_MS, codeForCompany, parseRow } from "../mailbox.js";
 import {
-  ROW_MINUTE_MS,
-  SEARCH,
-  WORKDAY_SEARCH,
+  ALL_PATTERNS,
+  clearSearch,
   clickRefresh,
-  codeForCompany,
   goToHash,
+  inboxUrl,
   openWorkdayRow,
-  parseRow,
+  pickProvider,
   readRows,
   readWorkdayMessage,
-} from "../mailbox.js";
+  searchFor,
+  typeSearch,
+} from "../mail-providers.js";
 
 /** Between turns, never inside one. That is the whole point of this file. */
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -135,7 +137,7 @@ const ROW_DEPTH = 3;
  * not happen is somebody reading "failed" and applying again.
  */
 const UNSENT =
-  "; the application was sent, so this employer stays claimed and must not be applied to again - the code is in Gmail and the saved copy of the form is waiting for it";
+  "; the application was sent, so this employer stays claimed and must not be applied to again - the code is in the mailbox and the saved copy of the form is waiting for it";
 
 /**
  * The mailbox reader.
@@ -144,9 +146,26 @@ const UNSENT =
  * every call it makes is one scheduler turn, and there is no way to ask it
  * for a long one.
  */
-export function createVerificationService({ browser, log = () => {}, used = new Set(), now = () => Date.now(), lookMs = LOOK_MS }) {
+export function createVerificationService({ browser, log = () => {}, used = new Set(), now = () => Date.now(), lookMs = LOOK_MS, stated = () => "auto" }) {
   const waits = new Map();
   let serial = 0;
+
+  /**
+   * Gmail or Outlook, asked fresh at every wait rather than fixed when
+   * the service was built.
+   *
+   * The open tabs are the strongest signal and the cheapest path, and
+   * both change during a run: a mailbox opened an hour in should be
+   * borrowed, not ignored because nothing was open at startup. `stated`
+   * is the applicant's own setting and overrides all of it, because a
+   * custom domain is the one case no amount of looking can settle.
+   */
+  async function choose(email) {
+    const open = typeof browser.findTab === "function"
+      ? await Promise.all(ALL_PATTERNS.map((pattern) => browser.findTab([pattern]).catch(() => null)))
+      : [];
+    return pickProvider({ stated: await stated(), openUrls: open.filter(Boolean).map((tab) => tab.url ?? ""), email });
+  }
 
   /**
    * Suspend this attempt until the mail arrives.
@@ -189,20 +208,22 @@ export function createVerificationService({ browser, log = () => {}, used = new 
    * own time Gmail will not give up.
    */
   async function securityCode({ email, company, board, submittedAt, timeoutMs = CODE_MS }) {
+    const provider = await choose(email);
     const names = [company, board].filter(Boolean);
     const since = (submittedAt ?? now()) - ROW_MINUTE_MS;
     const before = new Set();
-    const mailbox = await borrow({ browser, email, search: SEARCH, log });
+    const search = searchFor(provider, "code");
+    const mailbox = await borrow({ browser, email, provider, search, log });
     const deadline = now() + timeoutMs;
     let announced = false, looked = 0;
 
     try {
       while (now() < deadline) {
         // Only the first look pays the cold-start budget; see SETTLE_LOOKS.
-        const page = await settledList(mailbox, SEARCH, "Gmail is not signed in on this browser, so the code cannot be read", looked++ ? SETTLE_AGAIN : SETTLE_LOOKS);
+        const page = await settledList(mailbox, search, `${provider.name} is not signed in on this browser, so the code cannot be read`, looked++ ? SETTLE_AGAIN : SETTLE_LOOKS);
 
         if (page?.failure) {
-          log("warn", "Gmail showed an error page; looking again");
+          log("warn", `${provider.name} showed an error page; looking again`);
         } else {
           const rows = page?.rows ?? [];
           if (!announced) {
@@ -213,7 +234,7 @@ export function createVerificationService({ browser, log = () => {}, used = new 
             // every code falls back to "was it in the box before this
             // wait" - still safe, but worth seeing in the log rather
             // than inferring from a run full of unexplained parks.
-            if (mails.length > 0 && !mails.some((mail) => mail.at)) log("warn", "Gmail is not showing send times on its rows; codes are being told apart only by what was in the box before this application was sent");
+            if (mails.length > 0 && !mails.some((mail) => mail.at)) log("warn", `${provider.name} is not showing send times on its rows; codes are being told apart only by what was in the box before this application was sent`);
           }
           const found = codeForCompany(rows, { names, since, used, seen: before });
           // Refusing is final and deliberate: nothing later in the wait
@@ -264,22 +285,24 @@ export function createVerificationService({ browser, log = () => {}, used = new 
    * check against, so that is only taken off a row that matched by name.
    */
   async function activation({ email, host, company, timeoutMs = ACTIVATION_MS }) {
+    const provider = await choose(email);
     const tenant = String(host ?? "").split(".")[0];
     const names = [...new Set([tenant, ...tenant.split(/[-_.]/), company].filter((name) => String(name ?? "").trim().length >= 3))];
-    const mailbox = await borrow({ browser, email, search: WORKDAY_SEARCH, log });
+    const search = searchFor(provider, "workday");
+    const mailbox = await borrow({ browser, email, provider, search, log });
     const deadline = now() + timeoutMs;
     let announced = false, looked = 0;
 
     try {
       while (now() < deadline) {
         // Only the first look pays the cold-start budget; see SETTLE_LOOKS.
-        const page = await settledList(mailbox, WORKDAY_SEARCH, "Gmail is not signed in on this browser, so the account mail cannot be read", looked++ ? SETTLE_AGAIN : SETTLE_LOOKS);
+        const page = await settledList(mailbox, search, `${provider.name} is not signed in on this browser, so the account mail cannot be read`, looked++ ? SETTLE_AGAIN : SETTLE_LOOKS);
 
         if (page?.failure) {
-          log("warn", "Gmail showed an error page; looking again");
+          log("warn", `${provider.name} showed an error page; looking again`);
         } else {
           for (let row = 0; row < ROW_DEPTH && now() < deadline; row++) {
-            const opened = await mailbox.run(openWorkdayRow, [names, row]);
+            const opened = await mailbox.run(openWorkdayRow, [names, row, provider.spec.rows]);
             if (!opened?.clicked) {
               if (row === 0 && !announced) {
                 announced = true;
@@ -289,7 +312,7 @@ export function createVerificationService({ browser, log = () => {}, used = new 
             }
             for (let look = 0; look < 10; look++) {
               await pause(700);
-              const message = await mailbox.run(readWorkdayMessage, [host]);
+              const message = await mailbox.run(readWorkdayMessage, [host, provider.spec.message, provider.spec.opened]);
               if (message?.link) return { link: message.link };
               if (message?.code && opened.named) return { code: message.code };
               if (message?.opened) break;
@@ -325,7 +348,7 @@ export function createVerificationService({ browser, log = () => {}, used = new 
     let page = null;
     for (let look = 0; look < looks && !page?.settled && !page?.failure; look++) {
       await pause(look === 0 ? 400 : 1000);
-      page = await mailbox.run(readRows, [search]);
+      page = await mailbox.rows(search);
       if (page?.signedOut) throw new Error(signedOutMessage);
     }
     return page;
@@ -339,44 +362,60 @@ export function createVerificationService({ browser, log = () => {}, used = new 
 /**
  * The tab the mail is read in, showing the search.
  *
- * A Gmail tab the person already has open is borrowed by changing its hash,
- * which Gmail answers in a second; a cold tab is ten to twenty seconds of
- * loading, and at a verification step that is most of the wait. The tab is
- * handed back on the view it was on.
+ * A mailbox tab the person already has open is borrowed - Gmail by changing
+ * its hash, Outlook by typing in its search box - and either answers in a
+ * second; a cold tab is ten to twenty seconds of loading, and at a
+ * verification step that is most of the wait. The tab is handed back on the
+ * view it was on.
  */
-async function borrow({ browser, email, search, log }) {
-  const hash = `#search/${encodeURIComponent(search)}`;
-  const open = typeof browser.findTab === "function" ? await browser.findTab(["https://mail.google.com/*"]) : null;
+async function borrow({ browser, email, provider, search, log }) {
+  const open = typeof browser.findTab === "function" ? await browser.findTab(provider.patterns) : null;
 
   if (open?.id) {
     const previous = hashOf(open.url);
-    await browser.inFrame(open.id, 0, goToHash, [hash]);
-    return tab(browser, open.id, hash, () => browser.inFrame(open.id, 0, goToHash, [previous]).catch(() => {}));
+    const borrowed = tab(browser, open.id, provider, search, () =>
+      (provider.id === "gmail"
+        ? browser.inFrame(open.id, 0, goToHash, [previous])
+        : browser.inFrame(open.id, 0, clearSearch, [provider.spec.box])
+      ).catch(() => {}),
+    );
+    await borrowed.show();
+    return borrowed;
   }
 
-  log("info", "Gmail is not open in a tab; opening one. Keep Gmail open to make this faster");
-  const account = email ? `?authuser=${encodeURIComponent(email)}` : "";
+  log("info", `${provider.name} is not open in a tab; opening one. Keep ${provider.name} open to make this faster`);
   // On the inbox first, and onto the search once it has drawn. Gmail booted
   // straight onto a search hash runs the search but leaves its own search
   // box empty, and that box is how `readRows` knows it is looking at this
   // search rather than at whatever the tab showed before - so a tab opened
   // that way never settles, and every look spends its full forty tries.
+  // Outlook has no search URL to get this wrong with, but its box does not
+  // exist until the client has drawn, so it waits for the same reason.
   // Still one turn at a time: the waiting here is an await on nothing.
-  const tabId = await browser.openTab(`https://mail.google.com/mail/${account}#inbox`);
-  const cold = tab(browser, tabId, hash, () => browser.closeTab(tabId).catch(() => {}));
-  for (let look = 0; look < 30 && !(await cold.run(readRows, [""]))?.settled; look++) await pause(1000);
+  const tabId = await browser.openTab(inboxUrl(provider, email));
+  const cold = tab(browser, tabId, provider, search, () => browser.closeTab(tabId).catch(() => {}));
+  for (let look = 0; look < 30 && !(await cold.rows(""))?.settled; look++) await pause(1000);
   await cold.show();
   return cold;
 }
 
-function tab(browser, tabId, hash, release) {
+function tab(browser, tabId, provider, search, release) {
   const run = (fn, args = []) => browser.inFrame(tabId, 0, fn, args).catch(() => null);
+  // Gmail routes on the hash so a search is a URL; Outlook has no such URL
+  // and its search is a control, so the query is typed into the box and
+  // entered. Still one turn either way, which is what this file is for.
+  const show = () =>
+    provider.id === "gmail"
+      ? run(goToHash, [`#search/${encodeURIComponent(search)}`])
+      : run(typeSearch, [search, provider.spec.box]);
   return {
     tabId,
+    provider,
     run,
-    show: () => run(goToHash, [hash]),
+    rows: (query) => run(readRows, [query, provider.spec]),
+    show,
     refresh: async () => {
-      if (!(await run(clickRefresh))) await run(goToHash, [hash]);
+      if (!(await run(clickRefresh, [provider.spec.refresh]))) await show();
     },
     release,
   };

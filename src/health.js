@@ -134,7 +134,7 @@ export function mailSignal(result = {}) {
   // Gmail by name, because "not signed in" on its own is also what a board
   // says about its own candidate account, and treating that as a mailbox
   // failure would quarantine the mailbox over a Workday password.
-  if (/gmail is not signed in|not signed in to (?:gmail|google)|google account[^.]{0,40}signed out/i.test(reason)) return "signed-out";
+  if (/(?:gmail|outlook) is not signed in|not signed in to (?:gmail|google|outlook|microsoft)|(?:google|microsoft) account[^.]{0,40}signed out/i.test(reason)) return "signed-out";
   if (/no (?:security code|account mail|code)[^.]{0,80}arrived within|the mailbox answered with no code/i.test(reason)) return "timeout";
   return "";
 }
@@ -170,7 +170,7 @@ const succeeded = (status) => status === "submitted" || status === "unconfirmed"
  * all arrive as "an attempt that reached a form and sent nothing".
  */
 const OUR_GAP =
-  /required candidate (?:information|answers)|not supported by saved facts|could not honestly hold|compensation research is unavailable|demographic answer needs profile review|is required and the profile|the profile does not hold|offers no option matching|no answering service|address ?line ?\d|is required and must have a value|wants a document that is not|no (?:security code|account mail|code)[^.]{0,80}arrived within|the mailbox answered with no code|gmail is not signed in|registering is not permitted|no (?:workday )?password in the profile|needs an email and a password|could not sign in to|the original employer posting|already applied|duplicate/i;
+  /required candidate (?:information|answers)|not supported by saved facts|could not honestly hold|compensation research is unavailable|demographic answer needs profile review|is required and the profile|the profile does not hold|offers no option matching|no answering service|address ?line ?\d|is required and must have a value|wants a document that is not|no (?:security code|account mail|code)[^.]{0,80}arrived within|the mailbox answered with no code|(?:gmail|outlook) is not signed in|registering is not permitted|no (?:workday )?password in the profile|needs an email and a password|could not sign in to|the original employer posting|already applied|duplicate/i;
 
 /**
  * And the refusals that are the board's: it blocked us, it put a puzzle in
@@ -272,27 +272,27 @@ export function createHealth({ settings = {}, now = () => Date.now() } = {}) {
       else if (mail === "signed-out") {
         mailFails += 1;
         const record = raise("mailbox-signed-out", {
-          title: "Gmail is signed out, so no board that mails a code can be finished",
-          detail: `Gmail reported itself signed out on ${mailFails} attempt(s). Every Greenhouse code and every Workday activation link is unreadable until somebody signs in.`,
+          title: "The mailbox is signed out, so no board that mails a code can be finished",
+          detail: `The mailbox reported itself signed out on ${mailFails} attempt(s). Every Greenhouse code and every Workday activation link is unreadable until somebody signs in.`,
           remedy: "reset-mailbox",
           budget: limits.mailResets,
         });
         if (record.tried >= limits.mailResets) {
           record.severity = "stop";
-          record.detail = `Gmail is signed out and reopening the tab ${record.tried} time(s) did not fix it. The browser's Google session has to be signed in by hand; until then every emailed code is unreadable.`;
+          record.detail = `The mailbox is signed out and reopening the tab ${record.tried} time(s) did not fix it. The browser's mail session has to be signed in by hand; until then every emailed code is unreadable.`;
         }
       } else if (mail === "timeout") {
         mailFails += 1;
         if (mailFails >= limits.mailFailures) {
           const record = raise("mail-waits-failing", {
             title: "Every wait for an emailed code is timing out",
-            detail: `${mailFails} attempts in a row ended with no code or activation mail. The mailbox is reachable but nothing is being found in it, which is a stale Gmail tab, a search that has stopped matching, or mail going somewhere else.`,
+            detail: `${mailFails} attempts in a row ended with no code or activation mail. The mailbox is reachable but nothing is being found in it, which is a stale mailbox tab, a search that has stopped matching, or mail going somewhere else.`,
             remedy: "reset-mailbox",
             budget: limits.mailResets,
           });
           if (record.tried >= limits.mailResets) {
             record.severity = "stop";
-            record.detail = `${mailFails} mail waits in a row found nothing, and reopening Gmail ${record.tried} time(s) changed nothing. Each one of these costs four minutes and strands an application the board has already seen, so the rest of the day is not worth spending this way.`;
+            record.detail = `${mailFails} mail waits in a row found nothing, and reopening the mailbox ${record.tried} time(s) changed nothing. Each one of these costs four minutes and strands an application the board has already seen, so the rest of the day is not worth spending this way.`;
           }
         }
       }
