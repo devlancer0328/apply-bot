@@ -356,10 +356,11 @@ const unknownLegal = {
   type: "text",
   name: "",
   id: "",
-  // Was the felony question until a rule named it. The backstop is what
-  // is being checked, so this has to stay a question nothing answers:
-  // sensitive enough that the model may not guess, and held by nobody.
-  label: "Have you ever been asked to submit to a polygraph examination?",
+  // Was the felony question, then the polygraph one, until a rule named
+  // each. The backstop is what is being checked, so this has to stay a
+  // question nothing answers: sensitive enough that the model may not
+  // guess, and held by nobody.
+  label: "What is your date of birth?",
   required: true,
   options: [],
 };
@@ -664,13 +665,13 @@ const withHistory = { ...withDefaults({}), applicationResume: "Senior Engineer, 
 const askedBy = (company, profile) =>
   resolveField(employmentQuestion, profile, { ...CONTEXT, company, resume:profile.applicationResume || "", letter: `I would love to join ${company}.` }).value;
 
-check("yes for a company named in the resume", askedBy("Gainwell Technologies", withHistory) === "Yes", askedBy("Gainwell Technologies", withHistory));
+// No document decides this any more. A resume is written for the posting
+// it is sent to, so the employer's own words are in it, and a name found
+// there is evidence of what the document is about rather than of where
+// the applicant worked. Every "yes" it produced was one the applicant
+// would not have given, on a form they sign.
+check("the resume naming the company does not make it a former employer", askedBy("Gainwell Technologies", withHistory) === "No", askedBy("Gainwell Technologies", withHistory));
 check("no for a company that is not", askedBy("Discord", withHistory) === "No", askedBy("Discord", withHistory));
-check(
-  "the legal suffix does not decide it",
-  askedBy("Gainwell Technologies, Inc.", withHistory) === "Yes",
-  askedBy("Gainwell Technologies, Inc.", withHistory),
-);
 check(
   "the cover letter naming the company does not make it a former employer",
   askedBy("Netflix", withHistory) === "No",
@@ -678,8 +679,13 @@ check(
 );
 
 const declared = withDefaults({ previousEmployers: "Acme Corp, Globex", applicationResume: "Worked at Initech." });
-check("an explicit list is believed over the resume", askedBy("Globex", declared) === "Yes", askedBy("Globex", declared));
+check("the applicant's own list is the only thing that answers yes", askedBy("Globex", declared) === "Yes", askedBy("Globex", declared));
 check("and excludes what it does not name", askedBy("Initech", declared) === "No", askedBy("Initech", declared));
+check(
+  "the legal suffix does not decide it",
+  askedBy("Acme Corp, Inc.", declared) === "Yes",
+  askedBy("Acme Corp, Inc.", declared),
+);
 
 check(
   "the question is still never handed to the model",

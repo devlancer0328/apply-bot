@@ -113,8 +113,12 @@ await test("research that cannot be reached applies the posting instead of parki
   assert.equal(applied.mode, "research-unavailable");
   const parked = await screenJob(ordinary, { ...live, screeningUnknown: "strict" }, unreachable);
   assert.equal(parked.decision, "review");
-  // A cleared posting is the case where losing the research does matter.
-  assert.equal((await screenJob(defense, live, unreachable)).decision, "review");
+  // A cleared posting is the case where losing the research would matter,
+  // except that it no longer has to: the profile states no clearance is
+  // held, which is a denial the instant blockers can read without asking
+  // anyone. Unstated, it is a question again and goes to a person.
+  assert.equal((await screenJob(defense, live, unreachable)).decision, "rejected");
+  assert.equal((await screenJob(defense, { ...live, securityClearance: "" }, unreachable)).decision, "review");
 });
 
 await test("an account failure still stops the run rather than approving unknowns", async () => {

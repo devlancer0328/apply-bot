@@ -148,13 +148,21 @@ export const DEFAULT_PROFILE = {
   licenses: '',
   // The security clearance held, or the word "none".
   //
-  // Blank like the licences above and for the same reason, but this one
-  // also buys something: with "none" here, a posting demanding an active
-  // clearance is passed over in under a millisecond instead of costing a
-  // resume, a letter, a filled form and a submission before the employer
-  // rejects it on the one fact that was knowable from the start. Blank
-  // blocks nothing, because a blank is not a denial.
-  securityClearance: '',
+  // "none" rather than blank, which is the one place this file assumes a
+  // fact instead of waiting to be told one. A clearance is granted by a
+  // government, so almost nobody has one and everybody who does knows
+  // it; starting at blank meant the overwhelmingly common case had to be
+  // typed before it was true, and until it was, every form asking about
+  // a clearance stopped a finished application on a fact that was never
+  // in doubt. Anyone holding one replaces the word, and the question is
+  // answered from what they wrote instead.
+  //
+  // It also buys the blocker: with "none" here, a posting demanding an
+  // active clearance is passed over in under a millisecond rather than
+  // costing a resume, a letter, a filled form and a submission before
+  // the employer rejects it on the one fact that was knowable from the
+  // start. A blank blocks nothing, because a blank is not a denial.
+  securityClearance: 'none',
   // The instant rules in blockers.js: postings this candidate could not
   // be hired for whatever else is true. On by default and still inert
   // until the facts above are filled in, since every rule is gated on
@@ -207,8 +215,13 @@ export const DEFAULT_PROFILE = {
  *     only switch for it sat at the foot of the data page, so every profile
  *     in the field had the "job applied-folder" the rest of the extension
  *     talks about and nothing ever arrived in it.
+ *
+ * 2 - no security clearance held. The field shipped blank, a blank is not
+ *     a denial, and so every clearance question stopped an application on
+ *     a fact nobody was ever unsure about. Only an empty field is filled
+ *     in; a profile naming a clearance keeps it.
  */
-export const PROFILE_REVISION = 1;
+export const PROFILE_REVISION = 2;
 export const MANUAL_MODES = ['write', 'list', 'ignore'];
 export const GENERIC_FILL_MODES = ['off', 'vendors', 'any'];
 /** No record stated, nothing stated, and a record the applicant will describe themselves. */
@@ -233,7 +246,12 @@ export function withDefaults(stored = {}) {
   // to nothing, which is indistinguishable from a broken feed.
   value.fitThreshold=Math.max(0,Math.min(80,Math.floor(Number(value.fitThreshold))||0));
   for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled','keepCaptchaTabs','hardBlockers','fitCheckEnabled']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
-  if ((Number(stored?.profileRevision) || 0) < 1) value.exportFiles = true;
+  const revision = Number(stored?.profileRevision) || 0;
+  if (revision < 1) value.exportFiles = true;
+  // Only onto a field nobody has written in. Overwriting a stated
+  // clearance would be this file inventing a denial, which is the one
+  // thing it may never do.
+  if (revision < 2 && !String(value.securityClearance ?? '').trim()) value.securityClearance = 'none';
   value.profileRevision = PROFILE_REVISION;
   // "Review before sending" used to live here as `dryRun`, filling every
   // form and submitting none. It is gone rather than defaulted off: a

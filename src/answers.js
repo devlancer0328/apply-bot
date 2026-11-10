@@ -25,6 +25,10 @@ import { isCompensationQuestion, hasCompensationResearch, statedCompensationAnsw
 import {demographicWordings,isDemographicQuestion,isPronounAnswer,chooseDemographicOption} from './demographics.js';
 /** The rules whose answer is a fact about the applicant rather than about the job. */
 const DEMOGRAPHIC_RULES = new Set(['pronouns','gender','race','hispanic','veteran','disability','transgender','sexual-orientation']);
+/** The rules whose answer is a tie between the applicant and the employer applied to. */
+const EMPLOYER_TIE_RULES = new Set(['previous-employment','relationship-to-employee','family-at-employer','knows-an-employee']);
+const asksEmployerTie = (subject) =>
+  /(?:previously|ever) (?:worked|been employed|volunteered|interned)|current or former employee|former employee|worked (?:here|for us|at this company)|\b(?:externship|practicum|clinical rotation)\b/.test(subject);
 import {packAnswer,fillCompany} from './question-pack.js';
 
 const yesNoAnswer = value => value === 'yes' ? 'Yes' : value === 'no' ? 'No' : '';
@@ -346,18 +350,27 @@ const companyKey = (name) => normalise(name).replace(/[.,]/g, " ").replace(COMPA
 /**
  * Whether this applicant has worked for the company being applied to.
  *
- * The answer differs per application, which is the whole point: it is a fact
- * about the pair, not about the applicant, so a single setting cannot express
- * it. It is resolved against the employers in the generated application resume, with an
- * explicit list in the profile overriding that when the resume's wording and
- * the employer's legal name disagree.
+ * No, unless they have said otherwise in so many words.
  *
- * The cover letter is deliberately not consulted. It is written *to* this
- * company and says its name in every other sentence, so matching against it
- * would answer yes to every posting - a false statement on every application,
- * arrived at by looking in the one place guaranteed to mislead.
+ * This used to search the generated resume for the employer's name, on
+ * the reasoning that a fact about the pair cannot come from a setting
+ * about the applicant. The reasoning was right and the source was
+ * wrong. A resume is written for the posting it is sent to, so the
+ * employer's own words appear in it - the role, the stack, the industry,
+ * sometimes the company itself as a customer or a competitor - and a
+ * name found there is evidence of what the document is about rather than
+ * where the applicant worked. Every match it produced was a "yes" on a
+ * question the applicant would have answered "no", which is a false
+ * statement on a signed application: the single worst outcome in this
+ * file, and the one its judgement rules exist to avoid.
+ *
+ * So the guess is gone and the declaration stays. `previousEmployers` is
+ * a list the applicant typed, naming employers they choose to name, and
+ * an employer absent from it is an employer they never worked for. The
+ * cover letter was never consulted and still is not, for the reason that
+ * now disqualifies the resume too, only more so.
  */
-function workedAt(company, profile, resumeText) {
+function workedAt(company, profile) {
   const target = companyKey(company);
   if (!target) return false;
 
@@ -369,16 +382,7 @@ function workedAt(company, profile, resumeText) {
 
   // A bare "yes" in the profile means "assume I have worked everywhere", which
   // nobody means; it is kept only as a manual override for a single run.
-  if (profile.previouslyEmployed === "yes") return true;
-  if (declared.length > 0) return false;
-
-  const resume = normalise(resumeText);
-  if (!resume) return false;
-
-  // Word boundaries, so Discord is not found inside "discordant" and a
-  // two-letter company name does not match half the document.
-  if (target.length < 3) return false;
-  return new RegExp(`\\b${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(resume);
+  return profile.previouslyEmployed === "yes";
 }
 
 const AUTHORIZATION_ANSWER = {
@@ -1154,6 +1158,44 @@ const RULES = [
   },
   { id: "over-18", pattern: /\b18 years\b|\bat least 18\b|\bover 18\b|\bage of 18\b/, sensitive: true, value: (p) => yesNoAnswer(p.over18) },
   { id: "non-compete", pattern: /non[-\s]?compete|non[-\s]?solicit|restrictive covenant/, sensitive: true, value: (p) => yesNoAnswer(p.nonCompete) },
+  /**
+   * A government security clearance, answered from the applicant's own
+   * standing statement.
+   *
+   * Before the background-check rule, because "clearance background
+   * check" is this question wearing that one's words, and the consent
+   * that rule reads is a different fact.
+   *
+   * The file's rule for a regulated denial is that the model never
+   * writes one, and this keeps it - `sensitive`, so nothing falls back
+   * to a guess. What makes it answerable is the same trade
+   * `criminal-record` already makes: who holds the fact. A clearance is
+   * granted by a government and cannot be created by claiming it, but
+   * *not* holding one is a fact about the applicant, stated once in
+   * `profile.securityClearance`, and answering from that is reading
+   * their statement rather than inventing it.
+   *
+   * Only holding is answered. "Willing to obtain" and "eligible to
+   * obtain" are deliberately out of reach: the first is a preference
+   * nobody stated and the second turns on citizenship, and neither is
+   * settled by the applicant saying they hold nothing today.
+   */
+  {
+    id: "security-clearance",
+    pattern: /\bsecurity clearance\b|\bclearance level\b|\b(?:active|current|existing|government|dod|federal)\s+clearance\b|\bclearance\b[^|?]*\b(?:held|hold|holding|possess)\w*\b|\bts\/sci\b|\btop secret\b|\bsecret clearance\b|\bpublic trust\b|\bpolygraph\b/,
+    when: (field) => !/\b(?:willing|able|eligib\w*|open)\b[^|?]*\bto (?:obtain|get|acquire|apply|undergo|pursue|sponsor)\b|\bsponsor\w* (?:a |an )?(?:security )?clearance\b/.test(askedSubject(field)),
+    sensitive: true,
+    value: (p, _ctx, field) => {
+      const held = String(p.securityClearance ?? "").trim();
+      if (!held) return "";
+      const none = /^(?:none|no|n\/a|not applicable|do(?:es)? ?n[o']t|i do not)\b/i.test(held);
+      // "Do you hold one" wants the yes or no; "what level do you hold"
+      // wants the level, and the word the form itself offers when there
+      // is none to give.
+      if (yesNoControl(field) || /^(?:do|does|did|have|has|are|is|will|would)\b/.test(operativeQuestion(field))) return none ? "No" : "Yes";
+      return none ? "None" : held;
+    },
+  },
   {
     id: "background-check",
     pattern: /background (?:check|screen)|drug (?:test|screen)|pre-?employment screening/,
@@ -1208,7 +1250,7 @@ const RULES = [
     pattern: /(?:previously|ever) (?:worked|been employed|volunteered|interned)|former employee|worked (?:here|for us|at this company)|current or former employee|\b(?:externship|practicum|clinical rotation)\b|\bvolunteered\b[^|?]*\b(?:at|with|for)\b/,
     when: (field) => !/\b(?:remote|hybrid|environment|industry|startup|team|role of|as an?|with)\b/i.test(field.label ?? ""),
     sensitive: true,
-    value: (p, ctx) => (workedAt(ctx.company, p, ctx.resume) ? "Yes" : "No"),
+    value: (p, ctx) => (workedAt(ctx.company, p) ? "Yes" : "No"),
   },
   /**
    * Professional licences and certifications, which only the applicant
@@ -1551,6 +1593,17 @@ export function resolveField(field, profile, context) {
   // parked four finished applications over an answer it already had.
   if (rule && !DEMOGRAPHIC_RULES.has(rule.id) && isDemographicQuestion(subject)) {
     rule = RULES.find((entry) => DEMOGRAPHIC_RULES.has(entry.id) && matches(entry)) ?? rule;
+  }
+
+  // The same precedence for a tie to the employer, and for the same kind
+  // of collision. These questions say the company's name, company names
+  // are made of ordinary words, and a rule keyed on one of those words
+  // gets there first: "Have you ever worked at Clear Street?" was read
+  // by the street-address rule, which asked the profile for a street and
+  // parked the application when the answer was not one. The question is
+  // about a tie to this employer however the employer is spelled.
+  if (rule && !EMPLOYER_TIE_RULES.has(rule.id) && asksEmployerTie(subject)) {
+    rule = RULES.find((entry) => EMPLOYER_TIE_RULES.has(entry.id) && matches(entry)) ?? rule;
   }
 
   if (rule && rule.attach) {

@@ -71,11 +71,55 @@ test('one word from the applicant answers the whole licence class, in each shape
  assert.equal(resolveField(ask('Please list the licenses you hold.'),some,CONTEXT).value,'Series 7, Series 63');
 });
 
-test('a clearance and an identifier the profile cannot vouch for are never invented',()=>{
+test('an identifier the profile cannot vouch for is never invented',()=>{
+ assert.equal(resolveField(yesNo('What is your social security number?'),PROFILE,CONTEXT).outcome,'blocked');
+});
+
+/* ------------------------------------------- the clearance, as stated */
+
+test('a stated absence of clearance answers the clearance questions, in each shape',()=>{
+ // Holding one cannot be claimed; not holding one is a fact about the
+ // applicant, and profile.securityClearance is them stating it - the
+ // same trade criminal-record and licenses already make.
  for(const label of [
   'Do you currently hold or have you ever held an active US security clearance?',
-  'What is your social security number?',
- ]) assert.equal(resolveField(yesNo(label),PROFILE,CONTEXT).outcome,'blocked',label);
+  'Do you have an active security clearance?',
+  'Have you ever held a TS/SCI clearance?',
+  'Do you hold a current Public Trust?',
+  'Have you taken a polygraph examination?',
+ ]){
+  const resolved=resolveField(yesNo(label),PROFILE,CONTEXT);
+  assert.equal(resolved.outcome,'fill',label);
+  assert.equal(resolved.rule,'security-clearance',label);
+  assert.equal(resolved.value,'No',label);
+ }
+ // A box asking for the level gets the word, not a yes or no.
+ assert.equal(resolveField(ask('What is your current clearance level?'),PROFILE,CONTEXT).value,'None');
+});
+
+test('a clearance the applicant has not spoken for still goes to a person',()=>{
+ const silent={...PROFILE,securityClearance:''};
+ const resolved=resolveField(yesNo('Do you have an active security clearance?'),silent,CONTEXT);
+ assert.equal(resolved.outcome,'blocked');
+ assert.equal(resolved.rule,'security-clearance');
+});
+
+test('a clearance that is held is reported rather than denied',()=>{
+ const held={...PROFILE,securityClearance:'Top Secret'};
+ assert.equal(resolveField(yesNo('Do you have an active security clearance?'),held,CONTEXT).value,'Yes');
+ assert.equal(resolveField(ask('What clearance level do you hold?'),held,CONTEXT).value,'Top Secret');
+});
+
+test('willingness to obtain a clearance is not answered by holding none',()=>{
+ // A denial of what is held says nothing about what the applicant would
+ // agree to, and eligibility turns on citizenship rather than on this.
+ for(const label of [
+  'Are you willing to obtain a security clearance?',
+  'Are you eligible to obtain a US security clearance?',
+ ]){
+  const resolved=resolveField(yesNo(label),PROFILE,CONTEXT);
+  assert.notEqual(resolved.rule,'security-clearance',label);
+ }
 });
 
 /* ------------------------------------------------- the record, as stated */
@@ -112,7 +156,7 @@ test('the record rule does not reach a clearance, a licence or a background-chec
  // Each of these keeps its own setting, and a clean record says nothing
  // about any of them.
  assert.equal(resolveField(yesNo('Do you consent to a criminal background check?'),PROFILE,CONTEXT).rule,'background-check');
- assert.equal(resolveField(yesNo('Do you currently hold an active security clearance?'),PROFILE,CONTEXT).outcome,'blocked');
+ assert.equal(resolveField(yesNo('Do you currently hold an active security clearance?'),PROFILE,CONTEXT).rule,'security-clearance');
  assert.equal(resolveField(yesNo('Do you hold any securities industry licenses?'),PROFILE,CONTEXT).rule,'licenses');
 });
 
@@ -142,6 +186,36 @@ test('the household rule does not swallow the channel question or the applicant\
  // "Have you worked here before" is about the applicant, not a relative,
  // and keeps its own rule and its own evidence.
  assert.equal(resolveField(yesNo('Have you ever worked for this company before?'),PROFILE,CONTEXT).rule,'previous-employment');
+});
+
+/* ------------------------------------- no tie to the employer applied to */
+
+test('"have you ever worked here" is No, including when the resume names the company',()=>{
+ // The resume is written for the posting it is sent to, so the employer's
+ // own words are in it. Reading a tie out of that produced "Yes" on a
+ // question the applicant would answer "No" - a false statement on a
+ // signed form, arrived at from the one document guaranteed to mislead.
+ const context={...CONTEXT,resume:'Built the clearing integration against Clear Street APIs for a prior employer.'};
+ for(const label of [
+  'Have you ever worked at Clear Street?',
+  'Have you ever worked for this company before?',
+  'Are you a current or former employee?',
+  'Have you previously been employed by us?',
+  'Have you ever volunteered at this hospital?',
+ ]){
+  const resolved=resolveField(yesNo(label),PROFILE,context);
+  assert.equal(resolved.outcome,'fill',label);
+  assert.equal(resolved.rule,'previous-employment',label);
+  assert.equal(resolved.value,'No',label);
+ }
+});
+
+test('an employer the applicant named themselves is still answered Yes',()=>{
+ // The guess is gone; the declaration is not. This is the only way a Yes
+ // can be reached, and it is the applicant typing the name.
+ const declared={...PROFILE,previousEmployers:'Clear Street\nBloomberg'};
+ assert.equal(resolveField(yesNo('Have you ever worked at Clear Street?'),declared,CONTEXT).value,'Yes');
+ assert.equal(resolveField(yesNo('Have you ever worked at Clear Street?'),declared,{...CONTEXT,company:'Stripe'}).value,'No');
 });
 
 test("a driving licence is not a credential this answers, so it still goes to a person",()=>{

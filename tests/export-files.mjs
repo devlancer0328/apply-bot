@@ -20,7 +20,7 @@
  */
 import assert from 'node:assert/strict';
 import { BUILD_VERSION, DATABASE_PROTOCOL } from '../src/update.js';
-import { withDefaults } from '../src/profile.js';
+import { withDefaults, PROFILE_REVISION } from '../src/profile.js';
 
 let count = 0;
 const test = async (name, work) => { await work(); count++; console.log(`PASS ${name}`); };
@@ -69,12 +69,28 @@ await test('a profile written before the default changed starts writing to Downl
   // the revision does.
   const field = withDefaults({ fullName: 'Steven', exportFiles: false });
   assert.equal(field.exportFiles, true);
-  assert.equal(field.profileRevision, 1);
+  assert.equal(field.profileRevision, PROFILE_REVISION);
 });
 
 await test('turning the export off after the migration keeps it off', () => {
   const chosen = withDefaults({ fullName: 'Steven', exportFiles: false, profileRevision: 1 });
   assert.equal(chosen.exportFiles, false);
+});
+
+await test('a profile that never stated a clearance is read as holding none', () => {
+  // The field shipped blank and a blank is not a denial, so every form
+  // asking about a clearance stopped a finished application on a fact
+  // nobody was ever unsure about.
+  assert.equal(withDefaults({ fullName: 'Steven' }).securityClearance, 'none');
+  assert.equal(withDefaults({ fullName: 'Steven', securityClearance: '' }).securityClearance, 'none');
+});
+
+await test('a clearance the applicant stated is never overwritten by the migration', () => {
+  // Filling in a denial over someone's own words is the one thing this
+  // may not do, in either direction.
+  assert.equal(withDefaults({ securityClearance: 'Top Secret' }).securityClearance, 'Top Secret');
+  // And after the migration, clearing the field is a choice that stands.
+  assert.equal(withDefaults({ securityClearance: '', profileRevision: PROFILE_REVISION }).securityClearance, '');
 });
 
 await test('a stored profile missing the key is read as writing to Downloads', async () => {
