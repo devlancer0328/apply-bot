@@ -126,13 +126,42 @@ async function startRun() {
   await chrome.runtime.sendMessage({type:'run'});location.hash='monitor'; notify('Application run started.');
 }
 async function requireIdle() { if ((await chrome.runtime.sendMessage({type:'state'})).running) throw new Error('Stop the current run before changing applied history.'); }
-// Shared by the parked-application buttons. `documents-ready` is the
-// stage the banked-document drain reads, and clearing `resultId` drops
-// the stop that put the row here - left on, the next park would be
-// reasoned about against a stale outcome.
+/**
+ * What the applicant should expect, told apart by whether a run heard it.
+ *
+ * Worth a sentence rather than one fixed message. "Start Run to send it"
+ * read as an instruction to someone already watching a run, which is the
+ * state these buttons are most often pressed in, and following it would
+ * have ended the night they were watching.
+ */
+const nextStep = (sent, count) => sent?.running
+  ? `The run in progress will pick ${count === 1 ? 'it' : 'them'} up shortly - nothing else to do.`
+  : `Start Run to send ${count === 1 ? 'it' : 'them'}.`;
+/**
+ * Shared by the parked-application buttons.
+ *
+ * `documents-ready` is the stage the banked-document drain reads, and
+ * clearing `resultId` drops the stop that put the row here - left on, the
+ * next park would be reasoned about against a stale outcome.
+ *
+ * Deliberately not behind `requireIdle`. The moment a person is most
+ * likely to clear a hold is while they are watching the run that parked
+ * it: they see the captcha, they solve it, they press the button. Telling
+ * them to stop the night first is telling them to throw away the thing
+ * they were watching, and the message they actually got said the run was
+ * being protected from a change to applied history - which this is not.
+ *
+ * Nothing here needs the run stopped. Every page writes to SQLite through
+ * the background worker, so there is one writer and no row to race, and
+ * the links list is written from pages only. What the run does need is to
+ * be told, because it keeps its own memory of what it has already tried;
+ * that is the `requeue` message, and a failure to deliver it costs the
+ * wait until the next run rather than the queueing itself.
+ */
 async function queueParked(jobs) {
   for (const job of jobs) await saveJob({...job,stage:'documents-ready',hold:false,resultId:'',reason:'Resumed by you after the hold was cleared.'});
   await saveLinks([...new Set([...(await allLinks()).links,...jobs.map(job=>job.sourceUrl||job.applyUrl)])]);
+  return chrome.runtime.sendMessage({type:'requeue',ids:jobs.map(job=>job.id)}).catch(()=>({running:false}));
 }
 async function showHistoryPreview(candidates,details = '') {
   const target = content.querySelector('#history-preview'); if(!target) return;
@@ -185,7 +214,11 @@ const actionHandlers = {
   'download-run-log':()=>download(JSON.stringify(data.run,null,2),`apply-bot-run-${new Date().toISOString().slice(0,10)}.json`,'application/json'),
 
   'job-detail':async target=>{const job=await getJob(target.dataset.id);if(job)content.querySelector('#job-detail').innerHTML=jobDetails(job);},
-  'queue-eligible':async()=>{await requireIdle();const selected=(await allJobs()).filter(j=>['eligible','documents-ready'].includes(j.stage)&&j.screening?.decision==='eligible');if(!selected.length)throw new Error('No eligible pending jobs to resume.');await saveLinks([...new Set([...(await allLinks()).links,...selected.map(j=>j.sourceUrl||j.applyUrl)])]);notify(selected.length+' eligible jobs added to the queue. Start Run to resume saved stages.');},
+  // Not behind `requireIdle` either, and for the same reason as the
+  // parked buttons below: a person queueing work is not a person editing
+  // applied history, and the run they are watching is the one that should
+  // take it.
+  'queue-eligible':async()=>{const selected=(await allJobs()).filter(j=>['eligible','documents-ready'].includes(j.stage)&&j.screening?.decision==='eligible');if(!selected.length)throw new Error('No eligible pending jobs to resume.');await saveLinks([...new Set([...(await allLinks()).links,...selected.map(j=>j.sourceUrl||j.applyUrl)])]);const sent=await chrome.runtime.sendMessage({type:'requeue',ids:selected.map(j=>j.id)}).catch(()=>({running:false}));notify(`${selected.length} eligible jobs added to the queue. ${nextStep(sent,selected.length)}`);},
   'recheck-job':async target=>{await requireIdle();const job=await getJob(target.dataset.id);await saveJob({...job,stage:'discovered',screeningKey:'',extractedAt:0,extractionRetryAt:0,hold:false});const keys=new Set([job.id,job.sourceUrl,job.applyUrl].filter(Boolean).map(canonicalUrl)),stored=await stateStorage.get(['elsewhere','passed']);await stateStorage.set({elsewhere:(stored.elsewhere||[]).filter(id=>!keys.has(canonicalUrl(id))),passed:Object.fromEntries(Object.entries(stored.passed||{}).filter(([id])=>!keys.has(canonicalUrl(id))))});await saveLinks([...new Set([...(await allLinks()).links,job.sourceUrl||job.applyUrl])]);await renderRoute();notify('Queued for fresh extraction and research. Start Run when ready.');},
   /* ------------------------------------------------- questions page */
   // Saved straight to SQLite rather than batched behind one Save button:
@@ -209,41 +242,37 @@ const actionHandlers = {
    */
   /* ---------------------------------------- putting a parked job back */
   'resume-unblocked':async()=>{
-    await requireIdle();
     const ready=unblocked(await allJobs(),await answerPack());
     if(!ready.length)throw new Error('No parked application is waiting on an answered question.');
-    for(const job of ready)await saveJob({...job,stage:'documents-ready',hold:false,reason:'Resumed: every question it stopped on now has your answer.',blockedBy:[]});
-    await saveLinks([...new Set([...(await allLinks()).links,...ready.map(job=>job.sourceUrl||job.applyUrl)])]);
+    for(const job of ready)await saveJob({...job,stage:'documents-ready',hold:false,resultId:'',reason:'Resumed: every question it stopped on now has your answer.',blockedBy:[]});
+    const sent=await queueParked(ready);
     await renderRoute();
-    notify(`${ready.length} application${ready.length===1?'':'s'} back in the queue. Start Run to send ${ready.length===1?'it':'them'}.`);
+    notify(`${ready.length} application${ready.length===1?'':'s'} back in the queue. ${nextStep(sent,ready.length)}`);
   },
   // Back to `documents-ready` rather than to the front of discovery: the
   // resume, the letter and the compensation research are already on the
   // row, and the next run's banked-document drain sends them without
   // paying ChatGPT a second time for answers it already has.
   'resume-parked':async target=>{
-    await requireIdle();
     const [entry]=resumable(await allJobs(),data.results).filter(item=>item.job.id===target.dataset.id);
     if(!entry)throw new Error('This application is no longer safe to queue again. Reload the page.');
-    await queueParked([entry.job]);
+    const sent=await queueParked([entry.job]);
     await renderRoute();
-    notify(`${entry.job.company||'The application'} is back in the queue. Start Run to send it.`);
+    notify(`${entry.job.company||'The application'} is back in the queue. ${nextStep(sent,1)}`);
   },
   'resume-parked-all':async()=>{
-    await requireIdle();
     // The captcha ones are left out on purpose: each needs an answer to
     // "did you finish it yourself", and a bulk button cannot ask.
     const ready=resumable(await allJobs(),data.results).filter(entry=>!entry.captcha).map(entry=>entry.job);
     if(!ready.length)throw new Error('Nothing is waiting that can be queued without a decision.');
-    await queueParked(ready);
+    const sent=await queueParked(ready);
     await renderRoute();
-    notify(`${ready.length} application${ready.length===1?'':'s'} back in the queue. Start Run to send ${ready.length===1?'it':'them'}.`);
+    notify(`${ready.length} application${ready.length===1?'':'s'} back in the queue. ${nextStep(sent,ready.length)}`);
   },
   // The applicant clicked the puzzle and pressed Submit. Recorded as an
   // application so the employer is protected from a second one - which is
   // the whole reason this is asked rather than assumed.
   'parked-was-sent':async target=>{
-    await requireIdle();
     const job=await getJob(target.dataset.id);
     const result=data.results.find(row=>String(row.id)===String(job?.resultId));
     const applyUrl=result?.applyUrl||job?.applyUrl||job?.sourceUrl;

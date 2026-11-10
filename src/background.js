@@ -2408,6 +2408,20 @@ function appliedJobsText(rows) {
   return lines.join("\n");
 }
 
+/**
+ * Postings a person offered back from the Questions page while the run was
+ * going, waiting for the loop to notice them.
+ *
+ * A set at module scope rather than a call into the run, because the run
+ * is one long async function and a message handler may not reach inside
+ * it. The handler drops ids in; the loop picks them up at the top of its
+ * next turn, forgets that it has already seen them, and drains. That is
+ * the whole handshake, and it is deliberately one-way: nothing here starts
+ * work, so a click while six attempts are in flight cannot oversubscribe
+ * the workers or race the loop for a slot.
+ */
+const offeredBack = new Set();
+
 /** Security codes already typed this run, so none is typed twice. */
 const usedCodes = new Set();
 
@@ -3792,6 +3806,19 @@ async function runInternal() {
     await drainBanked();
 
     while (going && !state.stopping) {
+      // A posting a person just put back, while this run was going.
+      //
+      // Forgetting it is the point. `seenThisRun` is what stops one
+      // posting being attempted twice in a night, and a job that parked
+      // an hour ago is in it - so without this the row would sit at
+      // `documents-ready` being skipped by every drain until the run
+      // ended, which is exactly the "nothing happened" the button is
+      // meant to answer.
+      if (offeredBack.size > 0) {
+        for (const id of offeredBack) { seenThisRun.delete(id); seenThisRun.delete(canonicalUrl(id)); }
+        offeredBack.clear();
+        await drainBanked();
+      }
       // A source retired earlier in this run whose backoff has run out. A
       // run that keeps going all night would otherwise never touch it
       // again, however long ago the outage ended.
@@ -4030,6 +4057,16 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
       .then(() => (scheduleSettings.autopilot ? Promise.resolve(armAutopilot()).then(() => stateStorage.set({ autopilotResumeAt: 0 })) : chrome.alarms.clear(AUTOPILOT_ALARM)))
       .then(() => respond({ ok: true, schedule: scheduleSettings }), (error) => respond({ ok: false, error: error.message }));
     return true;
+  }
+  // The Questions page offering a parked application back. The row itself
+  // is already written - every page writes to SQLite through this worker,
+  // so there is one writer and nothing to race - and this is only how the
+  // run in progress hears about it.
+  if (message?.type === "requeue") {
+    const ids = [].concat(message.ids ?? []).filter(Boolean);
+    for (const id of ids) offeredBack.add(String(id));
+    respond({ ok: true, queued: ids.length, running: state.running || starting });
+    return false;
   }
   if (message?.type === "state") {
     restored.then(() => respond({ ...state, running: state.running || starting }));
