@@ -28,8 +28,25 @@ const DEMOGRAPHIC_RULES = new Set(['pronouns','gender','race','hispanic','vetera
 /** The rules whose answer is a tie between the applicant and the employer applied to. */
 const EMPLOYER_TIE_RULES = new Set(['previous-employment','relationship-to-employee','family-at-employer','knows-an-employee']);
 const asksEmployerTie = (subject) =>
-  /(?:previously|ever) (?:worked|been employed|volunteered|interned)|current or former employee|former employee|worked (?:here|for us|at this company)|\b(?:externship|practicum|clinical rotation)\b/.test(subject);
-import {packAnswer,fillCompany} from './question-pack.js';
+  /(?:previously|ever) (?:worked|been employed|volunteered|interned)|current or former employee|former employee|worked (?:here|for us|at this company)|\b(?:are|were) you (?:currently |previously |ever )?an employee of\b|\b(?:externship|practicum|clinical rotation)\b/.test(subject);
+import {packAnswer,fillCompany,templateQuestion} from './question-pack.js';
+
+/**
+ * Does the question name the employer it is being asked on behalf of?
+ *
+ * The employer-tie question is the one sentence where the company's own
+ * name decides the meaning: "have you previously worked in a remote
+ * environment" and "have you previously worked for us as an employee"
+ * share their opening words and are not the same question. Templating
+ * the asked text against the company is how the answer pack already
+ * tells two employers' versions of one question apart, so it is what
+ * tells this one from the question that only sounds like it.
+ */
+const namesEmployer = (label, company) => {
+  const text = String(label ?? "");
+  if (/\b(?:here|for us|with us|at this company|this company|our company|our organi[sz]ation)\b/i.test(text)) return true;
+  return templateQuestion(text, String(company ?? "")).includes("{company}");
+};
 
 const yesNoAnswer = value => value === 'yes' ? 'Yes' : value === 'no' ? 'No' : '';
 
@@ -867,7 +884,20 @@ const RULES = [
   { id: "phone-type", pattern: /phone (?:device )?type|device type/, value: () => ["Mobile", "Cell", "Cellular", "Home", "Landline"] },
   // "Country Phone Code", "Country / Territory Phone Code", "Phone Code".
   { id: "country-code", pattern: /(?:country|territory)[^|]*?phone code|country code|phone (?:country )?code|dial(?:ing)? code|phone country/, value: () => US_PHONE_COUNTRY },
-  { id: "phone-extension", pattern: /phone extension|\bextension\b|\bext\.?\b/, value: () => "" },
+  // A bare "extension" is only the phone box when a phone is what is
+  // being asked for. On its own it is also the word in "current work
+  // authorization will expire with no option for extension/further
+  // authorization", which is the sponsorship question, and blanking a
+  // required field answered it with nothing and parked the application.
+  {
+    id: "phone-extension",
+    pattern: /phone extension|\bextension\b|\bext\.?\b/,
+    when: (field) => {
+      const subject = askedSubject(field);
+      return /\bphone\b|\btelephone\b|\bmobile\b|\btel\b/.test(subject) || /^ext(?:ension)?\b/.test(subject.trim());
+    },
+    value: () => "",
+  },
   // Consent to be texted, which Ashby files under the "Phone" label as a
   // pair of yes/no choices. Reachable is the point of giving the number.
   {
@@ -1247,8 +1277,18 @@ const RULES = [
     // "a time a metric moved unexpectedly - in a job, internship,
     // research project" and that is an essay question, not a tie to this
     // employer.
-    pattern: /(?:previously|ever) (?:worked|been employed|volunteered|interned)|former employee|worked (?:here|for us|at this company)|current or former employee|\b(?:externship|practicum|clinical rotation)\b|\bvolunteered\b[^|?]*\b(?:at|with|for)\b/,
-    when: (field) => !/\b(?:remote|hybrid|environment|industry|startup|team|role of|as an?|with)\b/i.test(field.label ?? ""),
+    pattern: /(?:previously|ever) (?:worked|been employed|volunteered|interned)|former employee|worked (?:here|for us|at this company)|current or former employee|\b(?:are|were) you (?:currently |previously |ever )?an employee of\b|\b(?:externship|practicum|clinical rotation)\b|\bvolunteered\b[^|?]*\b(?:at|with|for)\b/,
+    // The guard words are how "worked in a remote environment" is kept
+    // out, and they also sit inside the commonest wording of the
+    // question itself - "worked for hims & hers as an employee or
+    // contractor", "worked for Clear Street as a full-time employee" -
+    // which parked both of those applications on a question whose answer
+    // is in the profile. A sentence that names the employer is this
+    // question whatever else it says; the guard is for the ones that
+    // name nobody.
+    when: (field, _profile, context) =>
+      namesEmployer(field.label, context?.company) ||
+      !/\b(?:remote|hybrid|environment|industry|startup|team|role of|as an?|with)\b/i.test(field.label ?? ""),
     sensitive: true,
     value: (p, ctx) => (workedAt(ctx.company, p) ? "Yes" : "No"),
   },

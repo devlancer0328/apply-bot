@@ -35,6 +35,26 @@ export class ChatWorkerPool {
     this.reserve=Math.max(0,Math.min(this.configured-1,Math.floor(Number(reserve))||0));
     this.active=new Set();this.tasks=new Map();this.queue=[];this.failures=0;this.completed=0;this.closed=false;this.reason='';this.healthy=0;this.recentFailures=0;
   }
+  /**
+   * A new width on the pool that is already there.
+   *
+   * A run starting while the previous run's last request is still in
+   * flight cannot be given a fresh pool: the request in flight holds a
+   * slot in the old one, and the two would each think they owned the
+   * account. Replacing the width in place keeps that slot honoured - the
+   * stale request finishes into the pool that started it, and the run
+   * narrowed to whatever is left until it does. The counters are the
+   * previous run's and are reset with it; `closed` is not carried over,
+   * because a pool stopped by a 401 last night is not stopped now.
+   */
+  reconfigure(limit=1,{reserve=0}={}){
+    this.configured=Math.max(1,Math.min(WIDEST,Math.floor(Number(limit))||1));
+    this.reserve=Math.max(0,Math.min(this.configured-1,Math.floor(Number(reserve))||0));
+    this.limit=this.configured;
+    this.closed=false;this.reason='';this.healthy=0;this.recentFailures=0;this.failures=0;this.completed=0;
+    this.drain();
+    return this;
+  }
   status(){return {configured:this.configured,effective:this.limit,reserve:this.reserve,busy:this.active.size,queued:this.queue.length,completed:this.completed,failures:this.failures,reason:this.reason,tasks:[...this.tasks.values()]};}
   emit(){this.onChange(this.status());}
   run(work,metadata={}){return new Promise((resolve,reject)=>{if(this.closed){reject(this.closed);return;}this.queue.push({work,resolve,reject,metadata});this.drain();});}

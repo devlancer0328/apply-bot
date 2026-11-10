@@ -474,7 +474,6 @@ async function converse(prompt, options) {
 const conversations=new Map();
 let workerPool=new ChatWorkerPool(1),workerContext=null,workerSession=false,onRecovery=()=>{};
 export function configureChatGptWorkers({limit=1,contextUrl='',onChange=()=>{},onRetry=()=>{}}={}){
-  if(workerPool.active.size||workerPool.queue.length)throw new Error('Wait for ChatGPT requests to finish before reconfiguring workers.');
   workerContext=parallelChatUrl(contextUrl);onRecovery=onRetry;
   workerSession=true;
   // Width needs a project or GPT address: every worker beyond the first
@@ -484,7 +483,19 @@ export function configureChatGptWorkers({limit=1,contextUrl='',onChange=()=>{},o
   // One worker kept back for form answers once there is more than one.
   // Not a partition: writing may use every worker but this one, and this
   // one returns to writing the instant no answer wants it.
-  workerPool=new ChatWorkerPool(workerContext?limit:1,onChange,{reserve:1});
+  const width=workerContext?limit:1;
+  // A request still running from the previous run used to refuse the new
+  // one outright, and the refusal ended the run on an error - so autopilot
+  // waited five minutes and started another run into the same wedged
+  // request, for as long as it stayed wedged. A request that outlives its
+  // run is not a reason to lose the next one: the pool keeps the slot that
+  // request is holding and takes the new width around it.
+  if(workerPool.active.size||workerPool.queue.length){
+    workerPool.onChange=onChange;
+    workerPool.reconfigure(width,{reserve:1});
+  }else{
+    workerPool=new ChatWorkerPool(width,onChange,{reserve:1});
+  }
   workerPool.emit();return {...workerPool.status(),contextSupported:!!workerContext};
 }
 export const chatGptWorkerStatus=()=>workerPool.status();

@@ -176,7 +176,17 @@ export function readRows(search, spec) {
       const hour = (Number(clock[1]) % 12) + (/[Pp]/.test(clock[3] ?? "") ? 12 : 0);
       const today = new Date();
       today.setHours(clock[3] ? hour : Number(clock[1]), Number(clock[2]), 0, 0);
-      return today.getTime();
+      // A bare clock is today's mail, and today's mail cannot have been
+      // sent later than now. A time ahead of the clock is a misread -
+      // the one seen here is the snippet's own "5:54 PM" being read as
+      // the send time when the date cell is not the cell it was looked
+      // for in - and a misread landing in the future passes every
+      // `since` test there is, which is how a code from the last
+      // application gets typed into this one. Unreadable is the safe
+      // answer: `codeForCompany` then falls back to what was in the box
+      // when the wait began. The day branch below already refuses a
+      // future date for the same reason.
+      return today.getTime() <= Date.now() ? today.getTime() : 0;
     }
     // A bare day and month: older than today, so dated to the start of
     // that day, which is early enough to be refused by any `since`.

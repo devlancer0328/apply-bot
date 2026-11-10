@@ -16,7 +16,13 @@ const authorization=resolveField({label:'Are you authorized to work in this coun
 assert.notEqual(authorization.rule,'country');assert.notEqual(authorization.value,'United States');
 console.log('PASS Residence matching cannot answer work authorization from a country name');
 const ai=await readFile(new URL('../src/ai.js',import.meta.url),'utf8');
-const facts=vm.runInNewContext('('+ai.slice(ai.indexOf('function facts(context)'),ai.indexOf('/** Required fields'))+')');
+// Cut at the function's own closing brace rather than at the next named
+// thing in the file: anything added between the two markers used to be
+// swept into the slice, and a second statement stops it being an
+// expression `vm` can evaluate.
+const factsStart=ai.indexOf('function facts(context)');
+const factsEnd=ai.indexOf('\n}\n',factsStart)+3;
+const facts=vm.runInNewContext('('+ai.slice(factsStart,factsEnd)+')');
 assert.match(facts({location:'Temple, Texas, United States',country:'United States'}),/Current country of residence: United States/);
 assert.match(facts({country:'United States'}),/does not establish citizenship/);
 console.log('PASS AI candidate facts include explicit residence without inferring citizenship');
