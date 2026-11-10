@@ -110,8 +110,20 @@ const CODE_MS = 420000;
 const ACTIVATION_MS = 180000;
 /** Between looks at the list. Short, because the mail usually lands at once. */
 const LOOK_MS = 4000;
-/** Gmail's own view takes a second or two to answer a hash change. */
+/**
+ * How long a look waits for Gmail's view to answer, and why the second
+ * look waits far less than the first.
+ *
+ * Forty seconds is the cold-start budget: a tab that has just been moved
+ * to this search may genuinely need it. Every look after that is a
+ * refresh of a view already on screen, which Gmail answers in about a
+ * second, and handing those the cold-start budget is what made a look
+ * cost forty seconds whenever the settle test failed to pass. Four
+ * seconds between looks on top of that bought three sights of the
+ * mailbox in two and a half minutes.
+ */
 const SETTLE_LOOKS = 40;
+const SETTLE_AGAIN = 12;
 /** Verification mails opened per look before waiting for a newer one. */
 const ROW_DEPTH = 3;
 
@@ -182,11 +194,12 @@ export function createVerificationService({ browser, log = () => {}, used = new 
     const before = new Set();
     const mailbox = await borrow({ browser, email, search: SEARCH, log });
     const deadline = now() + timeoutMs;
-    let announced = false;
+    let announced = false, looked = 0;
 
     try {
       while (now() < deadline) {
-        const page = await settledList(mailbox, SEARCH, "Gmail is not signed in on this browser, so the code cannot be read");
+        // Only the first look pays the cold-start budget; see SETTLE_LOOKS.
+        const page = await settledList(mailbox, SEARCH, "Gmail is not signed in on this browser, so the code cannot be read", looked++ ? SETTLE_AGAIN : SETTLE_LOOKS);
 
         if (page?.failure) {
           log("warn", "Gmail showed an error page; looking again");
@@ -255,11 +268,12 @@ export function createVerificationService({ browser, log = () => {}, used = new 
     const names = [...new Set([tenant, ...tenant.split(/[-_.]/), company].filter((name) => String(name ?? "").trim().length >= 3))];
     const mailbox = await borrow({ browser, email, search: WORKDAY_SEARCH, log });
     const deadline = now() + timeoutMs;
-    let announced = false;
+    let announced = false, looked = 0;
 
     try {
       while (now() < deadline) {
-        const page = await settledList(mailbox, WORKDAY_SEARCH, "Gmail is not signed in on this browser, so the account mail cannot be read");
+        // Only the first look pays the cold-start budget; see SETTLE_LOOKS.
+        const page = await settledList(mailbox, WORKDAY_SEARCH, "Gmail is not signed in on this browser, so the account mail cannot be read", looked++ ? SETTLE_AGAIN : SETTLE_LOOKS);
 
         if (page?.failure) {
           log("warn", "Gmail showed an error page; looking again");
@@ -307,9 +321,9 @@ export function createVerificationService({ browser, log = () => {}, used = new 
    * that returns, and the second between tries is an await on nothing. The
    * old version held the front across all forty.
    */
-  async function settledList(mailbox, search, signedOutMessage) {
+  async function settledList(mailbox, search, signedOutMessage, looks = SETTLE_LOOKS) {
     let page = null;
-    for (let look = 0; look < SETTLE_LOOKS && !page?.settled && !page?.failure; look++) {
+    for (let look = 0; look < looks && !page?.settled && !page?.failure; look++) {
       await pause(look === 0 ? 400 : 1000);
       page = await mailbox.run(readRows, [search]);
       if (page?.signedOut) throw new Error(signedOutMessage);

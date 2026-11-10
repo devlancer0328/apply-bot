@@ -199,10 +199,23 @@ async function drawn(tabId) {
   return false;
 }
 
-/** Polls until the list has answered, or the page has failed or signed out. */
-async function settledList(tabId, search, signedOutMessage) {
+/**
+ * Polls until the list has answered, or the page has failed or signed out.
+ *
+ * `looks` is the whole budget and it shrinks after the first one. Waiting
+ * forty seconds is right for a view that has not drawn yet and wrong for
+ * every look after that: by then Gmail is up and showing this search, and
+ * a refresh it answers in a second was being given the cold-start budget
+ * every time round the loop. With a look costing forty seconds and the
+ * pause between looks four, a two-and-a-half minute wait bought three
+ * sights of the mailbox.
+ */
+export const SETTLE_FIRST = 40;
+export const SETTLE_AFTER = 12;
+
+async function settledList(tabId, search, signedOutMessage, looks = SETTLE_FIRST) {
   let page = null;
-  for (let i = 0; i < 40 && !page?.settled && !page?.failure; i++) {
+  for (let i = 0; i < looks && !page?.settled && !page?.failure; i++) {
     await wait(i === 0 ? 400 : 1000);
     page = await runIn(tabId, readRows, [search]);
     if (page?.signedOut) throw new Error(signedOutMessage);
@@ -253,14 +266,42 @@ export function readRows(search) {
   // says "4:32 PM" with no date; the full date is in that cell's tooltip,
   // and a year is what tells it apart from the sender name and the
   // attachment marker, which carry tooltips of their own on the same row.
+  //
+  // Falling back to the visible cell matters more than it looks. A row
+  // whose time cannot be read is not merely undated: `codeForCompany`
+  // then falls back to "was this code in the box when the wait began",
+  // and the wait begins after Submit while Greenhouse mails the code
+  // within a second or two of it. So a code that arrived promptly - the
+  // normal case - gets recorded as having been there all along and is
+  // then refused for the whole seven minutes. That is the shape of a
+  // code the reader never finds at all, and it depends entirely on one
+  // undocumented tooltip.
   const timeOf = (row) => {
     for (const node of row.querySelectorAll("[title], [aria-label]")) {
       for (const value of [node.getAttribute("title"), node.getAttribute("aria-label")]) {
-        const at = value && /\b(?:19|20)\d{2}\b/.test(value) ? Date.parse(value) : NaN;
+        if (!value || !/\b(?:19|20)\d{2}\b/.test(value)) continue;
+        // "Mon, Nov 9, 2026 at 4:32 PM" is one of the spellings Gmail uses
+        // and the one spelling Date.parse refuses, over the word "at".
+        const at = Date.parse(value) || Date.parse(value.replace(/\bat\b/i, ","));
         if (at) return at;
       }
     }
-    return 0;
+    // The date cell itself, which is the last cell of the row and the most
+    // stable thing in it. Today's mail reads "4:32 PM"; anything older
+    // reads "Nov 8", which is all this needs to know - a code from another
+    // day is never this application's.
+    const shown = String(row.querySelector("td:last-child")?.textContent ?? row.textContent.split(/\s+/).slice(-3).join(" ")).trim();
+    const clock = shown.match(/\b(\d{1,2}):(\d{2})\s*([AaPp])?\.?[Mm]?\.?\b/);
+    if (clock) {
+      const hour = Number(clock[1]) % 12 + (/[Pp]/.test(clock[3] ?? "") ? 12 : 0);
+      const today = new Date();
+      today.setHours(clock[3] ? hour : Number(clock[1]), Number(clock[2]), 0, 0);
+      return today.getTime();
+    }
+    // A bare day and month: older than today, so dated to the start of
+    // that day, which is early enough to be refused by any `since`.
+    const day = Date.parse(`${shown} ${new Date().getFullYear()}`);
+    return day && day <= Date.now() ? day : 0;
   };
   // Gmail keeps the lists of views it has shown in the page, hidden, so a
   // tab that was on the inbox still holds those rows; only what is on
@@ -271,11 +312,25 @@ export function readRows(search) {
   const main = document.querySelector('[role="main"]')?.textContent ?? "";
   // A tab moved here from the inbox still shows the inbox for a moment, so
   // the list only counts once Gmail has put this search in its box.
-  const box = document.querySelector('form[role="search"] input, input[name="q"], input[aria-label="Search mail"]');
-  const searching = !search || (box?.value ?? "").includes(search.split(" ")[0]);
+  //
+  // Matched on the query's plain words rather than on its first
+  // space-delimited token, which for the code search is `{subject:"security`
+  // - a string Gmail never shows, because it rewrites what it puts in the
+  // box: the operator syntax becomes chips, quoting and spacing move, and
+  // the braces of an OR group do not survive at all. So this test could
+  // not pass, nothing ever read as settled, and every look at the mailbox
+  // spent its whole forty-second budget before using the rows anyway. On a
+  // two-and-a-half minute wait that is three looks instead of thirty, and
+  // it is most of why a code that had arrived was found late or not at all.
+  const box = document.querySelector('form[role="search"] input, input[name="q"], input[aria-label="Search mail"], input[aria-label^="Search"]');
+  const terms = String(search ?? "").toLowerCase().match(/[a-z]{4,}/g) ?? [];
+  const typed = String(box?.value ?? "").toLowerCase();
+  // No box at all is markup that has moved further than this function can
+  // follow; the hash is what was asked for and is the honest fallback.
+  const searching = !search || !terms.length || (box ? terms.some((term) => typed.includes(term)) : decodeURIComponent(location.hash || "").toLowerCase().includes(terms[0]));
   // The frame of the page is up long before the search has answered, so
   // "loaded" means the list has rows or Gmail has said there are none.
-  const settled = searching && (rows.length > 0 || /no messages matched|nothing matched/i.test(main));
+  const settled = searching && (rows.length > 0 || /no messages matched|nothing matched|no results/i.test(main));
   const failure = /temporary error|something went wrong/i.test(document.body?.textContent?.slice(0, 2000) ?? "");
   return { signedOut, settled, failure, rows };
 }
@@ -347,7 +402,7 @@ export async function fetchSecurityCode({ email, company, board, used, submitted
   try {
     while (Date.now() < deadline) {
       attempt += 1;
-      const page = await settledList(tabId, SEARCH, "Gmail is not signed in on this browser, so the code cannot be read");
+      const page = await settledList(tabId, SEARCH, "Gmail is not signed in on this browser, so the code cannot be read", attempt === 1 ? SETTLE_FIRST : SETTLE_AFTER);
 
       if (page?.failure) {
         log?.("warn", "Gmail showed an error page; retrying");
@@ -453,7 +508,7 @@ export async function fetchWorkdayActivation({ email, host, openTab, closeTab, l
   try {
     while (Date.now() < deadline) {
       attempt += 1;
-      const page = await settledList(tabId, WORKDAY_SEARCH, "Gmail is not signed in on this browser, so the account mail cannot be read");
+      const page = await settledList(tabId, WORKDAY_SEARCH, "Gmail is not signed in on this browser, so the account mail cannot be read", attempt === 1 ? SETTLE_FIRST : SETTLE_AFTER);
       if (page?.failure) {
         log?.("warn", "Gmail showed an error page; retrying");
       } else {
