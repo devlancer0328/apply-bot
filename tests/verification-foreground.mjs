@@ -43,10 +43,28 @@ const measured = [];
  */
 const row = (text, at = Date.now()) =>
   `<tr class="zA"><td>${text}</td>${at ? `<td class="xW xY"><span title="${new Date(at).toUTCString()}">5:54 PM</span></td>` : ""}</tr>`;
+/**
+ * The clock Gmail prints inside the snippet, kept away from the current
+ * minute.
+ *
+ * Gmail puts the row's time in the snippet text as well as in the date
+ * cell, and a row drawn without that cell hands the snippet to the time
+ * reader - which is the whole point of the stale-code test below. A
+ * fixed "5:54 PM" therefore made this file fail for the ninety seconds
+ * a day when 5:54 PM is now: the reader parses it as today at 5:54,
+ * which is neither in the future (so it is not discarded) nor safely in
+ * the past (so it clears `since`), and the stale code is accepted.
+ * Three hours ahead is never the current minute, whatever time the
+ * suite is run at.
+ */
+const shownTime = () => {
+  const at = new Date(Date.now() + 3 * 3600000);
+  return `${((at.getHours() + 11) % 12) + 1}:${String(at.getMinutes()).padStart(2, "0")} ${at.getHours() < 12 ? "AM" : "PM"}`;
+};
 const codeMail = (company, code) =>
-  `Greenhouse 2, Security code for your application to ${company}, 5:54 PM, Copy and paste this code into the security code field on your application: ${code}. After that...`;
+  `Greenhouse 2, Security code for your application to ${company}, ${shownTime()}, Copy and paste this code into the security code field on your application: ${code}. After that...`;
 const CODE_MAIL = codeMail("Example Corp", "53329416");
-const WORKDAY_MAIL = "Example Tenant, Verify your candidate account, 5:54 PM, Please verify your account to continue.";
+const WORKDAY_MAIL = `Example Tenant, Verify your candidate account, ${shownTime()}, Please verify your account to continue.`;
 /**
  * Gmail's own search box, holding both searches at once so one fixture
  * serves both readers. Taken from the exported constants rather than
