@@ -2851,6 +2851,47 @@ async function planNextRun() {
   return decision;
 }
 
+/**
+ * Resume now, after the applicant has dealt with whatever stopped the run.
+ *
+ * Pressing Run has always done this - it forgets the standing conditions
+ * on the way past, which is the applicant saying they have looked. What
+ * it does not do is check, and for the commonest stop by far that matters.
+ * ChatGPT signs itself out, the run ends, autopilot waits five minutes and
+ * then ten and then twenty; the applicant signs back in within seconds and
+ * then waits out a timer for a problem that is already gone. Pressing Run
+ * blindly is the other half of the same trap: if the sign-in did not take,
+ * the run ends four seconds later having spent a retry and doubled the
+ * wait, and the sentence it leaves behind is the one already on screen.
+ *
+ * So the check comes first, and the answer decides. Reachable writer, and
+ * the conditions are dropped, the back-off is cleared and the run starts.
+ * Unreachable, and nothing is started and nothing is spent - the applicant
+ * is told what is still wrong while the tab they need is in front of them.
+ *
+ * `runFailures` goes back to zero on the way through. It is the exponent
+ * of that widening back-off, and leaving it standing would mean a run
+ * somebody resumed by hand - and watched succeed - still being treated as
+ * the fourth failure in a row the next time anything went wrong.
+ */
+async function resumeNow() {
+  if (state.running || starting) return { ok: false, error: "A run is already going." };
+  const profile = await readProfile();
+  const writer = await checkWriter(profile).catch((error) => ({ ok: false, error: error?.message ?? String(error) }));
+  if (!writer.ok) return { ok: false, error: writer.error ?? "ChatGPT could not be reached." };
+  health.forget();
+  keepHealth();
+  runFailures = 0;
+  await stateStorage.set({ autopilotResumeAt: 0 }).catch(() => {});
+  // Through to storage before the run starts, for the reason the Run
+  // button does it: a run reloads health from storage as its first act,
+  // so a cleared record still in the write buffer is overwritten by the
+  // very condition it was cleared to lift.
+  await durableHealth.flush().catch(() => {});
+  run();
+  return { ok: true };
+}
+
 async function stopAutopilot() {
   const stored = (await stateStorage.get("schedule")).schedule || {};
   if (withScheduleDefaults(stored).autopilot) log("info", "Autopilot is off: you pressed Stop. Turn it back on in Settings when the day should continue by itself.");
@@ -4069,7 +4110,17 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     return false;
   }
   if (message?.type === "state") {
-    restored.then(() => respond({ ...state, running: state.running || starting }));
+    // `autopilotResumeAt` lives in storage rather than in `state` because
+    // it has to outlive the worker, and the monitor needs it to say how
+    // long the wait has left to run - which is the whole reason anybody
+    // would reach for the resume button.
+    restored
+      .then(() => stateStorage.get("autopilotResumeAt").catch(() => ({})))
+      .then(({ autopilotResumeAt = 0 } = {}) => respond({ ...state, running: state.running || starting, resumeAt: autopilotResumeAt }));
+    return true;
+  }
+  if (message?.type === "resume-now") {
+    resumeNow().then(respond, (error) => respond({ ok: false, error: error?.message ?? String(error) }));
     return true;
   }
   if (message?.type === "probe") {

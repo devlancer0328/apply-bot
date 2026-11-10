@@ -285,6 +285,38 @@ const actionHandlers = {
   'hold-job':async target=>{await requireIdle();const job=await getJob(target.dataset.id);await saveJob({...job,stage:'held',hold:true,reason:'Held by you. Recheck to return it to the queue.'});await renderRoute();},
   'reload-extension':() => reloadExtension(),
   retry:renderRoute, 'start-run':startRun,
+  /**
+   * Resume after dealing with whatever stopped the run.
+   *
+   * The check is the reason this is not just Start run. ChatGPT signing
+   * itself out is the commonest stop there is, and both obvious moves
+   * are wrong: waiting out a five-minute back-off for a problem fixed in
+   * fifteen seconds, or pressing Run while still signed out and spending
+   * a retry - which doubles the wait - to be told the same thing again.
+   * The worker asks ChatGPT first and only starts if it answers.
+   *
+   * The label changes while it waits because the check brings ChatGPT's
+   * tab to the front and waits for its composer, which is seconds rather
+   * than instant, and a button that looks like it did nothing gets
+   * pressed again.
+   */
+  'resume-now':async target=>{
+    const label=target.textContent;
+    target.textContent='Checking ChatGPT…';
+    target.disabled=true;
+    // The monitor redraws itself every two seconds, and the check takes
+    // longer than that - without this the button would silently turn
+    // back into an idle "Resume now" while it was still working, which
+    // is an invitation to press it a second time.
+    resuming=true;
+    try{
+      const answer=await chrome.runtime.sendMessage({type:'resume-now'});
+      if(!answer?.ok)throw new Error(answer?.error||'ChatGPT could not be reached.');
+      location.hash='monitor';
+      await renderRoute();
+      notify('ChatGPT answered, the warnings are cleared and the run has started.');
+    }finally{resuming=false;target.textContent=label;target.disabled=false;}
+  },
   'stop-run':async () => { await chrome.runtime.sendMessage({type:'stop'}); await renderRoute(); notify('Stopping. Nothing new is being started, requests in flight are being cancelled, and autopilot is off.'); },
   'save-settings':saveSettings, 'save-schedule':saveSchedule, 'new-resume':newResume,
   'import-resume':() => document.getElementById('resume-import').click(),
@@ -449,11 +481,11 @@ document.getElementById('refresh-tabs').addEventListener('click',async () => { t
 content.addEventListener('input',event=>{if(!['job-search','job-filter'].includes(event.target.id))return;const search=(document.getElementById('job-search')?.value||'').toLowerCase(),stage=document.getElementById('job-filter')?.value||'all';const rows=(data.jobs||[]).filter(j=>(stage==='all'||j.stage===stage)&&[j.company,j.title,j.reason].join(' ').toLowerCase().includes(search));content.querySelector('#jobs-table').innerHTML=jobsTable(rows);});
 window.addEventListener('hashchange',renderRoute);
 window.addEventListener('beforeunload',event => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
-let statePolling=false;
+let statePolling=false,resuming=false;
 setInterval(async () => {if(statePolling)return;statePolling=true;try {
  const wasRunning=data.run?.running;data.run=await deadline(chrome.runtime.sendMessage({type:'state'}),5000,'The extension is not responding. Reload it if the connection does not recover.');updateRunState();
  if(wasRunning&&!data.run.running&&!dirty&&location.hash!=='#monitor')await renderRoute();
- const body=document.getElementById('monitor-body');if(body){const openDetails=[...body.querySelectorAll('details[open]')].map(e=>e.textContent);body.innerHTML=monitorBody(data.run);for(const el of body.querySelectorAll('details'))if(openDetails.includes(el.textContent))el.open=true;}
+ const body=document.getElementById('monitor-body');if(body&&!resuming){const openDetails=[...body.querySelectorAll('details[open]')].map(e=>e.textContent);body.innerHTML=monitorBody(data.run);for(const el of body.querySelectorAll('details'))if(openDetails.includes(el.textContent))el.open=true;}
  const warning=document.getElementById('monitor-connection');if(warning)warning.hidden=true;
  const log=document.getElementById('live-log');if(log)log.innerHTML=pages.runLogHtml(data.run);
  }catch(error){const warning=document.getElementById('monitor-connection');if(warning){warning.hidden=false;warning.textContent=error.message;}}finally{statePolling=false;}

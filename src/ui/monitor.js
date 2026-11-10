@@ -136,15 +136,45 @@ function dormantBody(run){
  <p class="info">${day.submitted||0} of ${day.target} sent today, and no run will start by itself. The rest of the day waits for Start run.</p>
  <p class="hint">Turn on "Keep starting runs until the target is met" in the day plan to have the next run start on its own. Pressing Stop always turns it back off.</p></section>`;
 }
+/**
+ * The wait between a run that stopped and the one autopilot will start.
+ *
+ * ChatGPT signs itself out, the run ends, and the next attempt is five
+ * minutes away - then ten, then twenty, because the back-off widens on
+ * every failure in a row. Signing back in takes about fifteen seconds,
+ * and the rest of that wait is spent on a problem that is already gone.
+ *
+ * Shown as a countdown with the way out beside it, because a wait nobody
+ * can see the end of reads as a bot that has quietly stopped working.
+ * `Resume now` checks ChatGPT before starting rather than after, so
+ * pressing it while still signed out costs nothing and says so; pressing
+ * Run would have spent a retry and doubled the wait to find out.
+ */
+function waitingBody(run,now){
+ if(run.running||run.stopping)return '';
+ const left=Math.max(0,(run.resumeAt||0)-now);
+ const stopped=['error','health'].includes(run.stopReason?.code||'')||(run.health?.conditions||[]).some(c=>c.severity==='stop');
+ if(!left&&!stopped)return '';
+ const why=run.stopReason?.message||run.lastError?.message||'The last run ended early.';
+ return `<section class="card"><div class="card-head"><h2>Waiting to try again</h2><span class="pill">${left?`next run in ${elapsedText(left)}`:'nothing scheduled'}</span></div>
+ <p class="info">${h(why)}</p>
+ <p class="hint">If that was ChatGPT signing itself out, sign back in on its tab and press Resume now - it checks ChatGPT before starting, so there is no cost to pressing it too early.${left?` Left alone, the next run starts by itself in ${h(elapsedText(left))}.`:''}</p>
+ <div class="actions">${button('resume-now','Resume now','primary')}<a class="button quiet" href="https://chatgpt.com/" target="_blank" rel="noreferrer">Open ChatGPT ↗</a></div></section>`;
+}
 function healthBody(run){
  const health=run.health;const conditions=health?.conditions||[];
  const halted=run.stopReason?.code==='health';
- if(!conditions.length)return halted?`<section class="card"><h2>Needs you</h2><p class="info">${h(run.stopReason.message)}</p><p class="hint">Press Start run once this is dealt with; that is also what clears the warning.</p></section>`:'';
+ // Conditions stand while a run is going as well as after one - a cooled
+ // board, a short disk - and resuming into a run that is already going
+ // is the one thing the worker will refuse outright. Offered only when
+ // there is something to resume.
+ const idle=!run.running&&!run.stopping;
+ if(!conditions.length)return halted?`<section class="card"><h2>Needs you</h2><p class="info">${h(run.stopReason.message)}</p>${idle?'<p class="hint">Resume now, above, checks that ChatGPT is reachable and then clears this.</p>':''}</section>`:'';
  const word={stop:'Stops the day',quarantined:'Board left alone',degraded:'Being worked around'};
  return `<section class="card"><div class="card-head"><h2>${conditions.some(c=>c.severity==='stop')?'Needs you':'Health'}</h2><span class="pill ${conditions.some(c=>c.severity==='stop')?'':'green'}">${conditions.length} condition(s)</span></div>
  ${conditions.map(c=>`<div class="progress-line ${c.severity==='stop'?'error':'warn'}"><strong>${h(c.title)}</strong> · ${h(word[c.severity]||c.severity)}<p class="hint">${h(c.detail)}</p><p class="hint">First seen ${h(new Date(c.since).toLocaleTimeString())}${c.tried?`, ${c.tried} automatic recovery attempt(s) since`:''}.</p></div>`).join('')}
  ${health?.screenshots===false?`<p class="hint">Last-page screenshots are not being saved while disk is short${health.freeBytes>0&&health.freeBytes<Infinity?`; ${Math.round(health.freeBytes/1e6)} MB of room is left`:''}.</p>`:''}
- ${conditions.some(c=>c.severity==='stop')?'<p class="hint">Press Start run once this is dealt with; that is also what clears the warning.</p>':''}</section>`;
+ ${conditions.some(c=>c.severity==='stop')?`<p class="hint">${idle?'Resume now, above, checks that ChatGPT is reachable and then clears these. Pressing Start run clears them without checking.':'This stops the day once the work in flight has finished.'}</p>`:''}</section>`;
 }
 /**
  * The day, above the run.
@@ -180,7 +210,7 @@ function dayBody(run){
 }
 export function monitorBody(run={}){
  const now=Date.now(),end=run.running?now:(run.finishedAt||run.lastActivityAt||now),workers=run.aiWorkers||{},last=now-(run.lastActivityAt||now);
- return `${dormantBody(run)}${healthBody(run)}${dashboard(run)}<details><summary>Day and run detail</summary><div class="detail-body">${dayBody(run)}</div></details><section class="card"><div class="card-head"><h2>${run.running&&run.stopping?'Stopping':run.running?'Running · '+h(run.phase):'Run status'}</h2><span class="pill">${run.startedAt?elapsedText(end-run.startedAt):'Not started'}</span></div><p class="${run.stopReason?.code==='error'?'info':'muted'}">${h(runSummary(run))}</p>${run.running&&last>60000?`<p class="info">No visible progress for ${elapsedText(last)}. ChatGPT may still be thinking; each response has a six-minute deadline. You can stop after the current operations.</p>`:''}<div class="stats">${[['Discovered',run.discovered||0],['Confirmed',run.targetSubmitted?`${run.submitted||0}/${run.targetSubmitted}`:run.submitted||0],['Attempts',run.attempted||0],['Screened',run.screened||0],['Held for review',run.review||0],['Rejected',run.rejected||0]].map(([label,value])=>`<div class="stat"><small>${label}</small><strong>${value}</strong></div>`).join('')}</div><p class="hint">Last progress: ${run.lastActivityAt?h(new Date(run.lastActivityAt).toLocaleTimeString()):'—'} · ${run.running?`Discovery source: ${h(run.discoverySource||'loaded links')}`:'Saved results remain in Applications and Jobs.'}</p></section>
+ return `${waitingBody(run,now)}${dormantBody(run)}${healthBody(run)}${dashboard(run)}<details><summary>Day and run detail</summary><div class="detail-body">${dayBody(run)}</div></details><section class="card"><div class="card-head"><h2>${run.running&&run.stopping?'Stopping':run.running?'Running · '+h(run.phase):'Run status'}</h2><span class="pill">${run.startedAt?elapsedText(end-run.startedAt):'Not started'}</span></div><p class="${run.stopReason?.code==='error'?'info':'muted'}">${h(runSummary(run))}</p>${run.running&&last>60000?`<p class="info">No visible progress for ${elapsedText(last)}. ChatGPT may still be thinking; each response has a six-minute deadline. You can stop after the current operations.</p>`:''}<div class="stats">${[['Discovered',run.discovered||0],['Confirmed',run.targetSubmitted?`${run.submitted||0}/${run.targetSubmitted}`:run.submitted||0],['Attempts',run.attempted||0],['Screened',run.screened||0],['Held for review',run.review||0],['Rejected',run.rejected||0]].map(([label,value])=>`<div class="stat"><small>${label}</small><strong>${value}</strong></div>`).join('')}</div><p class="hint">Last progress: ${run.lastActivityAt?h(new Date(run.lastActivityAt).toLocaleTimeString()):'—'} · ${run.running?`Discovery source: ${h(run.discoverySource||'loaded links')}`:'Saved results remain in Applications and Jobs.'}</p></section>
  ${run.feedScan?`<section class="card"><h2>Job discovery</h2><p>${h(run.feedScan.source)} &middot; ${run.feedScan.unique||0} unique links &middot; ${run.feedScan.percent||0}% of loaded list scanned</p><p class="hint">${h({'chunk-limit':'Reading job recommendations','waiting-for-loader':'Waiting for job cards to load','waiting-for-network':'Waiting for the job list to respond','waiting-for-next-page':'Waiting for the next page','confirming-bottom':'Checking for more jobs','backend-end-confirmed':'End of feed confirmed','stable-bottom-confirmed':'End of feed confirmed','confirmed-empty-feed':'No jobs available','feed-error':'Job list needs attention'}[run.feedScan.reason]||'Reading job recommendations')} &middot; ${run.feedScan.complete?'Feed scan complete':'More of this feed remains to be scanned'}</p></section>`:''}
  <section class="card"><div class="card-head"><h2>ChatGPT workers</h2><span class="pill">${workers.busy||0}/${workers.effective||1} active · ${workers.queued||0} waiting</span></div>${workers.reason?`<p class="info">${h(workers.reason)}</p>`:''}${(workers.tasks||[]).map(t=>`<article class="card"><h3>${h(t.label||'ChatGPT request')}</h3><p>${h(t.stage)}${t.mode?' ('+h(t.mode)+')':''} · ${elapsedText(now-t.startedAt)} · ${t.characters||0} response characters</p><p class="hint">${t.taskId?'Task '+h(t.taskId.slice(0,8)):''}${t.tabId?' · tab '+t.tabId:''}</p></article>`).join('')||'<p class="muted">No ChatGPT request is active.</p>'}</section>
  ${run.lastError?`<section class="card"><h2>Latest error</h2><p class="info">${h(run.lastError.message)}</p><p class="hint">${h(new Date(run.lastError.at).toLocaleString())}. Individual job failures can be followed by more work; the run status above explains whether the whole run stopped.</p></section>`:''}
