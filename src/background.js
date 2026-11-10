@@ -753,7 +753,7 @@ async function sourceFromLink(link, profile, via = "", hints = {}) {
       return { skip: `already applied to "${title}" at ${company}, reached earlier by another link`, duplicate: true };
     }
     if (hints.employers && !hints.employers.room(company,[link,via,report.apply.url])) {
-      return { skip: `${company} has had its allowance of roles for today`, duplicate: true };
+      return { skip: `already applied to ${company}; one application per employer`, duplicate: true };
     }
     if (!companyKey(company)) return {skip:'The hiring company could not be verified. Review manually; no application was prepared or sent.'};
     if(hints.extractOnly)return {posting:{id:canonicalUrl(link),sourceUrl:via||link,applyUrl:report.apply.url,company,title,jd,descriptionSource:report.descriptionSource,originalUrl:report.descriptionSource.url,metadata:report.metadata||{},ats:report.apply.ats,mode:'fillable',extractedAt:Date.now(),extractionMs:Date.now()-openedAt}};
@@ -825,7 +825,7 @@ async function manualApplication({ link, via, applyUrl, listing, hints, profile,
     return { skip: `already applied to "${title}" at ${company}, reached earlier by another link`, duplicate: true };
   }
   if ((hints.employers && !hints.employers.room(company,[link,via,applyUrl])) || hints.history?.matchCompany(company,link,via,applyUrl)) {
-    return { skip: `${company} has had its allowance of roles for today`, duplicate: true };
+    return { skip: `already applied to ${company}; one application per employer`, duplicate: true };
   }
   if(hints.extractOnly&&profile.manualMode!=='write')return {posting:{id:canonicalUrl(link),sourceUrl:via||link,applyUrl:applyUrl||link,company,title,jd:'',mode:'manual',manualReason:reason,ats:atsOf(applyUrl||link),extractedAt:Date.now()}};
   if (jd.length < JD_MIN) {
@@ -3179,7 +3179,21 @@ async function runInternal() {
   // they are the only company-level refusal left. Everything with a link is
   // refused by that link, through `match`, for as long as the record exists.
   const barred = historyIndex(externalHistory.filter(row=>!historyUrls(row).some(url=>jobIdentityKeys(url).length)));
-  const duplicates = {match:(...urls)=>applications.match(...urls),matchCompany:(company,...urls)=>barred.matchCompany(company,...urls),add:row=>applications.add(row)};
+  // One application per employer, ever.
+  //
+  // This asked `barred`, which holds only the imported "never this
+  // employer again" rows, so an employer was refused by posting address
+  // and by a budget that rolls over at midnight - which is one per day,
+  // not one at all. It asks `applications` now: everything ever recorded
+  // as sent, so an employer applied to in March is still spent in
+  // November.
+  //
+  // What that costs is understood and chosen. One per employer turns a
+  // three hundred a day target into three hundred employers never
+  // applied to before, and the target will not always be met. What it
+  // buys is that the one reader who matters never sees three resumes
+  // from the same candidate in a week.
+  const duplicates = {match:(...urls)=>applications.match(...urls),matchCompany:(company,...urls)=>barred.matchCompany(company,...urls)||applications.matchCompany(company,...urls),add:row=>applications.add(row)};
   if (externalHistory.length) log('info',`${externalHistory.length} imported applications and submission markers loaded for duplicate protection.`);
   const counted = recorded.filter(protectsCompany);
   const applied = new Set(counted.map((row) => jobKey(row.company, row.title)).filter(Boolean));
@@ -3189,7 +3203,7 @@ async function runInternal() {
   const employers = employerDay({limit:scheduleSettings.perCompanyPerDay,gapMs:scheduleSettings.employerGapMs});
   for (const row of externalHistory) if(!historyUrls(row).some(url=>jobIdentityKeys(url).length)) employers.bar(row.company,historyUrls(row));
   for (const row of counted) employers.seed(row.company,historyUrls(row),row.at||0);
-  log('info',`Up to ${scheduleSettings.perCompanyPerDay} role(s) per employer per day, at least ${Math.round(scheduleSettings.employerGapMs/60000)} minute(s) apart. The same posting is never applied to twice.`);
+  log('info','One application per employer, ever - an employer applied to on any earlier day is skipped. The same posting is never applied to twice.');
   if (applied.size > 0) await keep("history/applied-jobs.txt", appliedJobsText(recorded), { overwrite: true });
   // Links that led somewhere other than a board this bot fills. That does
   // not change between runs, and a recommendations list repeats itself from

@@ -104,13 +104,23 @@ await test('One employer under two names is one budget, and an unresolvable empl
  assert.equal(seeded.room('Acme Inc',[gh('acme','2')]),2,'one sent last year does not');
 });
 
-await test('The day plan carries the limit and the spacing, within sane bounds',()=>{
- assert.equal(withScheduleDefaults({}).perCompanyPerDay,3);
+await test('The day plan fixes the employer limit and the pacing, and a saved plan cannot raise them',()=>{
+ assert.equal(withScheduleDefaults({}).perCompanyPerDay,1,'one application per employer');
  assert.equal(withScheduleDefaults({}).employerGapMs,20*60000);
- assert.equal(withScheduleDefaults({perCompanyPerDay:0}).perCompanyPerDay,1,'zero roles per employer would be a bot that never applies');
- assert.equal(withScheduleDefaults({perCompanyPerDay:900}).perCompanyPerDay,25);
- assert.equal(withScheduleDefaults({perCompanyPerDay:'junk'}).perCompanyPerDay,3);
- assert.equal(withScheduleDefaults({employerGapMs:-5}).employerGapMs,0);
+ assert.equal(withScheduleDefaults({}).attemptConcurrency,6);
+ assert.equal(withScheduleDefaults({}).documentBacklog,6);
+ assert.equal(withScheduleDefaults({}).exhaustedRetryMs,10*60000);
+ // These had fields in the options page and no longer do. A plan saved
+ // before that removal still carries what was typed then, and reading it
+ // back would leave an upgraded machine applying three times to one
+ // employer through a field nobody can see.
+ assert.equal(withScheduleDefaults({perCompanyPerDay:3}).perCompanyPerDay,1,'a stored limit from an older version is ignored');
+ assert.equal(withScheduleDefaults({documentBacklog:10}).documentBacklog,6);
+ assert.equal(withScheduleDefaults({exhaustedRetryMs:20*60000}).exhaustedRetryMs,10*60000);
+ assert.equal(withScheduleDefaults({employerGapMs:0}).employerGapMs,20*60000);
+ // The two that are still a choice stay one.
+ assert.equal(withScheduleDefaults({dailyTarget:120}).dailyTarget,120);
+ assert.equal(withScheduleDefaults({autopilot:false}).autopilot,false);
 });
 
 /* ------------------------------------------- the employers' own job boards */

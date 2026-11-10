@@ -163,7 +163,13 @@ async function saveSettings() {
 async function saveSchedule() {
   const form = content.querySelector('#schedule-form'); if (!form) return;
   const values = readFields(form,{});
-  const schedule = withScheduleDefaults({ ...data.schedule, autopilot:values.autopilot === true, dailyTarget:values.dailyTarget, attemptConcurrency:values.attemptConcurrency, documentBacklog:values.documentBacklog, boardGapMs:Math.round(values.boardGapMs * 1000), perCompanyPerDay:values.perCompanyPerDay, employerGapMs:Math.round(values.employerGapMs * 60000), attemptDeadlineMs:Math.round(values.attemptDeadlineMs * 60000), wizardDeadlineMs:Math.round(values.wizardDeadlineMs * 60000), exhaustedRetryMs:Math.round(values.exhaustedRetryMs * 60000) });
+  // Only what the form still shows. The eight fields that were here read
+  // undefined now that the card is two fields, and `withScheduleDefaults`
+  // would read each undefined as "use the default" - which is where they
+  // are set anyway, so the result would be right by accident. Naming the
+  // two keeps a saved day plan from quietly resetting anything a later
+  // version chooses to make adjustable again.
+  const schedule = withScheduleDefaults({ ...data.schedule, autopilot:values.autopilot === true, dailyTarget:values.dailyTarget });
   await stateStorage.set({ schedule });
   data.schedule = schedule;
   // The worker holds the alarm, so it has to be told: a setting saved into

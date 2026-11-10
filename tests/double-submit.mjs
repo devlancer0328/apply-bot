@@ -416,23 +416,28 @@ await test("The run-start history index refuses a posting a dead worker already 
   assert.match(background, /const applications = historyIndex\(\[\.\.\.externalHistory,/);
 });
 
-await test("A second role at an employer already applied to is allowed, and the same role twice is not", async () => {
-  // Found by this suite: the claim used to match on company alone, so the
-  // first application to an employer barred every later one. With a
-  // three-roles-per-employer budget and a day that revisits big boards,
-  // that silently threw away a large share of the queue and looked
-  // exactly like a duplicate being correctly refused. Company-wide bars
-  // are now only the explicit ones - a history row with no posting of its
-  // own - and identity is the posting plus the folded role.
+await test("A second role at an employer already applied to is refused, however it is spelled or addressed", async () => {
+  // One application per employer, ever - the rule this gate exists to
+  // make true rather than likely.
+  //
+  // It has been both ways. Matching on company alone was found by this
+  // suite to refuse every later role at an employer, which threw away a
+  // large share of a queue built on a three-roles-a-day budget and
+  // looked exactly like a duplicate being correctly refused. The budget
+  // is one now, so refusing the employer is the rule rather than a bug
+  // in it, and the collection filter in background.js drops these long
+  // before a resume is written for one.
   const request = await bootWorker();
   const roles = (title, url) => claimThrough(request)({ applyUrl: url, company: "Northstar Dynamics", title, id: url });
   assert.equal((await roles("Backend Engineer", "https://northstar.example/jobs/1")).claimed, true);
-  assert.equal((await roles("Platform Engineer", "https://northstar.example/jobs/2")).claimed, true);
-  assert.equal((await roles("Data Engineer", "https://northstar.example/jobs/3")).claimed, true);
-  // The same opening reached through a different address - an aggregator
-  // listing against the employer's own careers page - is the duplicate
-  // the URL check cannot see, so the folded role has to catch it.
-  assert.equal((await roles("Backend Engineer (Remote, US)", "https://aggregator.example/listing/9981")).claimed, false);
+  assert.equal((await roles("Platform Engineer", "https://northstar.example/jobs/2")).claimed, false, "a different opening at the same employer is still the same employer");
+  // Reached through an aggregator rather than the employer's own page,
+  // and named differently. Neither the address nor the folded role can
+  // see that these are one company; the company index has to.
+  assert.equal((await roles("Data Engineer", "https://aggregator.example/listing/9981")).claimed, false);
+  assert.equal((await claimThrough(request)({ applyUrl: "https://northstar.example/jobs/4", company: "Northstar Dynamics, Inc.", title: "SRE", id: "https://northstar.example/jobs/4" })).claimed, false, "a legal ending does not make a second employer");
+  // And an employer never applied to is untouched by any of it.
+  assert.equal((await claimThrough(request)({ applyUrl: "https://southstar.example/jobs/1", company: "Southstar Labs", title: "Backend Engineer", id: "https://southstar.example/jobs/1" })).claimed, true);
 });
 
 await test("An explicit company bar still refuses every posting at that employer", async () => {

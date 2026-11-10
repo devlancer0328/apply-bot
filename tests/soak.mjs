@@ -109,7 +109,15 @@ const dice = (seed) => () => (seed = (seed * 1103515245 + 12345) % 2147483648) /
  * each, which boards - and three hundred hand-written fixtures would fix
  * that distribution by accident.
  */
-function* postings({ employers = 140, from = 0 } = {}) {
+function* postings({ employers = 600, from = 0 } = {}) {
+  // Six hundred of them, where a day's target is three hundred. It was a
+  // hundred and forty, which was generous against a budget of three roles
+  // each and impossible against a budget of one: the day stopped at a
+  // hundred and twenty-seven, having run out of employers rather than
+  // time. That is a true thing about one-per-employer and worth knowing,
+  // but it is not what this file tests - a day that ends early tests the
+  // throughput, pacing and storage machinery below it on a third of the
+  // work. The supply question has its own test further down.
   for (let n = from; ; n++) {
     const employer = n % employers;
     const board = BOARD_NAMES[employer % BOARD_NAMES.length];
@@ -166,7 +174,7 @@ async function night({
   const world = { mail: "ok", hostile: new Set(), writer: "up", lossRate: 1 / 12, freeBytes: 8e9, reloads: 0, cooled: [], feed: "flowing", ...initial };
   const settings = withScheduleDefaults({ dailyTarget: target, boardGapMs: 45000, employerGapMs: 600000, attemptConcurrency: 2, autopilot: true, ...overrides });
   const health = createHealth({ now: () => at });
-  const employers = employerDay({ limit: 3, gapMs: settings.employerGapMs, now: () => at });
+  const employers = employerDay({ limit: settings.perCompanyPerDay, gapMs: settings.employerGapMs, now: () => at });
   const slots = createSlots({ limit: settings.attemptConcurrency });
   const roll = dice(20261107);
 
@@ -306,13 +314,17 @@ await test("A three-hundred-application day finishes, stays healthy, and sends n
   const index = historyIndex(history);
   for (const job of run.sent) assert.ok(index.match(job.applyUrl), `${job.applyUrl} has to be in tomorrow's duplicate index`);
 
-  // Nobody got more than the budget, and the tally the applicant reads in
-  // the morning adds up to the number of applications that were sent.
+  // One application per employer, across a whole night of three hundred.
+  // This is the property the budget, the claim and the history index all
+  // exist to produce, and the only place all three run together.
   const perEmployer = new Map();
   for (const job of run.sent) perEmployer.set(job.company, (perEmployer.get(job.company) ?? 0) + 1);
-  assert.equal(Math.max(...perEmployer.values()), 3);
+  assert.equal(Math.max(...perEmployer.values()), 1, "an employer that received two applications is the mistake that cannot be taken back");
+  assert.equal(perEmployer.size, 300, "three hundred applications means three hundred different employers");
+  // And the tally the applicant reads in the morning adds up to what was
+  // actually sent.
   assert.equal(day.employers.reduce((total, row) => total + row.count, 0), 300);
-  assert.equal(day.employers[0].count, 3);
+  assert.equal(day.employers[0].count, 1);
   assert.equal(run.slots.status().busy, 0, "a night that leaks one slot is a pool that is wedged by morning");
 });
 
@@ -324,12 +336,14 @@ await test("Every board is paced apart all night, and no employer is applied to 
   for (const board of BOARD_NAMES) assert.ok(run.ledger.boards[board]?.nextAt > NOON, `${board} was never paced`);
   assert.equal(boardWaitMs(run.ledger, "nonexistent", run.settings, run.at), 0);
 
-  // Three roles at one employer is allowed; three inside ten minutes is the
-  // thing a recruiter's tooling notices, and the spacing is what prevents it.
+  // The spacing outlived the rule it was written for: an employer may now
+  // only ever receive one, so there is no second application for it to
+  // hold back. It stays because the budget is a setting and this is the
+  // guard underneath it, and the check becomes the stronger statement -
+  // an employer appears once in a night, not merely twice slowly.
   const last = new Map();
   for (const job of run.sent) {
-    const before = last.get(job.company);
-    if (before !== undefined) assert.ok(job.at - before >= run.settings.employerGapMs, `${job.company} was applied to twice inside the spacing`);
+    assert.equal(last.has(job.company), false, `${job.company} was applied to twice in one night`);
     last.set(job.company, job.at);
   }
 });

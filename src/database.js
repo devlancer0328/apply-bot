@@ -185,7 +185,16 @@ export function databaseRequest(request) {
           if(!companyKey(value?.company)) throw new Error('The hiring company must be verified before submitting.');
           if (!jobIdentityKeys(value?.applyUrl).length) throw new Error('Cannot submit without a valid application URL.');
           const role = roleKey(value.company,value.title);
-          const match = barred.matchCompany(value.company,...historyUrls(value)) || index.match(...historyUrls(value)) || (role && roles.has(role) ? {company:value.company,title:value.title,kind:'role'} : null);
+          // And the employer itself, whenever it was last applied to. The
+          // note above describes why this was narrowed to imported rows:
+          // refusing a company here cancelled a per-employer budget that
+          // allowed three a day, and did it at the last gate, after the
+          // resume was written and the form filled. The budget is one now,
+          // so there is nothing left to cancel, and the collection filter
+          // in background.js refuses these long before a resume is spent
+          // on them. This is the gate that makes it true rather than
+          // likely.
+          const match = barred.matchCompany(value.company,...historyUrls(value)) || index.matchCompany(value.company,...historyUrls(value)) || index.match(...historyUrls(value)) || (role && roles.has(role) ? {company:value.company,title:value.title,kind:'role'} : null);
           if (match) { connection.run('ROLLBACK'); inTransaction = false; return {claimed:false,record:match}; }
           put('history',{...value,id:`submission:${jobIdentityKeys(value.applyUrl)[0]}`,kind:'submission',importedAt:Date.now()});
         } else if (action === 'releaseSubmission') {

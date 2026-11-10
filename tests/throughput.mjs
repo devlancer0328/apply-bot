@@ -184,7 +184,10 @@ await test('Autopilot restarts after ordinary endings, backs off after errors, a
  assert.equal(nextRun({ledger:met,settings,stopReason:{code:'target'}}).start,false);
 });
 await test('One board is paced without holding up the others, and the gap is jittered',()=>{
- const settings=withScheduleDefaults({boardGapMs:60000}),now=1000;
+ // The gap is fixed in schedule.js and no longer read off a saved plan, so
+ // it is set past the defaults here: what this checks is the pacing and the
+ // jitter, which have to hold for whatever that fixed figure becomes.
+ const settings={...withScheduleDefaults({}),boardGapMs:60000},now=1000;
  let ledger=emptyLedger(now);
  assert.equal(boardWaitMs(ledger,'greenhouse',settings,now),0);
  ledger=boardStarted(ledger,'greenhouse',settings,now,()=>0.5);
@@ -241,8 +244,13 @@ await test('A slot reclaimed at its deadline stops counting, so one abandoned at
 });
 await test('The day plan refuses nonsense without falling back to no limits at all',()=>{
  const value=withScheduleDefaults({dailyTarget:'many',attemptConcurrency:40,boardGapMs:-5,attemptDeadlineMs:1,autopilot:'yes'});
- assert.equal(value.dailyTarget,300);assert.equal(value.attemptConcurrency,6);assert.equal(value.boardGapMs,0);
- assert.equal(value.attemptDeadlineMs,60000);assert.equal(value.autopilot,false);
+ // The pacing and the limits are fixed rather than clamped now: a stored
+ // 40 does not become 6 by being too large, it is simply not read.
+ assert.equal(value.attemptConcurrency,6);assert.equal(value.boardGapMs,45000);
+ assert.equal(value.attemptDeadlineMs,12*60000);
+ // The two still saved from the options page are the two still checked.
+ assert.equal(value.dailyTarget,300);assert.equal(value.autopilot,false);
+ assert.equal(withScheduleDefaults({dailyTarget:9999}).dailyTarget,5000);
  assert.equal(withScheduleDefaults({autopilot:true}).autopilot,true);
 });
 console.log(`${count} throughput and demand-driven document checks passed.`);

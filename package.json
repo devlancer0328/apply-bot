@@ -1,7 +1,7 @@
 {
   "name": "apply-bot-workspace",
   "private": true,
-  "version": "4.10.0",
+  "version": "4.11.0",
   "type": "module",
   "description": "Local resume workspace and browser application assistant with visual templates and SQLite storage.",
   "scripts": {
