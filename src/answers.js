@@ -71,6 +71,18 @@ const yesNoAnswer = value => value === 'yes' ? 'Yes' : value === 'no' ? 'No' : '
  */
 const ASKS_STATUS = /\bsponsor\w*|\bvisas?\b|\bwork(?:ing)? authoriz\w*|\bauthoriz(?:ed|ation) to work\b|\bright to work\b|\bwork permit\b|\bh-?1b\b|\bgreen card\b|\bemployment eligib\w*/;
 
+/**
+ * A field asking for somebody else's details rather than the applicant's.
+ *
+ * The referral questions are the ones that do this: a yes or no about
+ * being referred, and then a box for the name of whoever did it. The
+ * contact rules answered the second with the applicant's own address -
+ * Newfold Digital's "what's their name or email address?" was sent
+ * "danieltorres3274@gmail.com" - which is not merely useless, it names
+ * the applicant as their own referrer.
+ */
+const SOMEONE_ELSE = /\btheir\b|\btheirs\b|\bhis\b|\bher\b|\bhers\b|\breferr?er\b|\bwho referred\b|\breference(?:'s)?\b|\bemergency contact\b|\bnext of kin\b/;
+
 const US_STATES = [
   "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut", "delaware",
   "florida", "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
@@ -945,7 +957,26 @@ const RULES = [
     value: (p) => `${p.firstName} ${p.lastName}`.trim(),
   },
   { id: "employee-id", pattern: /^employee id\b/, onlyRequired:true, sensitive:true, value:()=>'' },
-  { id: "email", pattern: /\be-?mail\b/, value: (p) => p.email },
+  /**
+   * The applicant's own address, and only where it is being asked for.
+   *
+   * This had no condition at all, so any field with the word "email" in
+   * it anywhere got the address typed into it. Awesome Motive builds
+   * email marketing software, and both of its written questions - "if
+   * you had access to behavioural data ... (form submissions, conversion
+   * flows, email engagement), what is the first thing you would build?"
+   * and one about a popup that grows a small business's email list -
+   * were answered with "danieltorres3274@gmail.com" and sent. Newfold
+   * Digital asks "what's their name or email address?" about whoever
+   * referred you, and got the applicant's own.
+   *
+   * Two conditions, because the two failures are different. A field
+   * asking for an account of something is not asking for an address,
+   * however many times the word appears in it - that is `shortAnswer`,
+   * which this rule should always have had. And a field asking about
+   * somebody else wants somebody else's; see SOMEONE_ELSE.
+   */
+  { id: "email", pattern: /\be-?\s?mail\b/, when: (field) => shortAnswer(field) && /\be-?\s?mail\b/.test(askedSubject(field)) && !SOMEONE_ELSE.test(askedSubject(field)), value: (p) => p.email },
   // Workday splits the phone across three boxes; only the number is the
   // number. The device type is a menu, and the extension is left blank.
   { id: "phone-type", pattern: /phone (?:device )?type|device type/, value: () => ["Mobile", "Cell", "Cellular", "Home", "Landline"] },
@@ -1136,7 +1167,10 @@ const RULES = [
       /\bcity\b|\blocation\b|\baddress\b|\bwhere are you (?:located|based)\b|where (?:do|will|would) you (?:intend|plan|expect) to work|where (?:will|would|do) you (?:be )?work(?:ing)? from|^from where/,
     // "...your right to work in your current location?" is a sponsorship
     // question wearing the word this rule watches for. See ASKS_STATUS.
-    when: (field) => !ASKS_STATUS.test(askedSubject(field)),
+    // And "what's their name or email address?" is an address belonging
+    // to somebody else, which this rule claimed the moment the email
+    // rule stopped claiming it. See SOMEONE_ELSE.
+    when: (field) => !ASKS_STATUS.test(askedSubject(field)) && !SOMEONE_ELSE.test(askedSubject(field)),
     // A box labelled just "City" (Workday's address form, with the state in
     // its own box) gets the city alone; anything broader gets "City, State".
     value: (p, _ctx, field) => (/^\s*(?:city|town|city\s*\/\s*town)\s*\*?\s*$/i.test(field?.label ?? "") ? p.city : `${p.city}, ${stateName(p.state)}`),
@@ -1225,6 +1259,37 @@ const RULES = [
     when: (field) => !AUTHORIZED_WITHOUT_SPONSORSHIP.test(askedSubject(field)),
     sensitive: true,
     value: (p) => yesNoAnswer(p.requiresSponsorship),
+  },
+  {
+    /**
+     * Whether the applicant holds a visa, which is not whether they may work.
+     *
+     * Mission Underwriting asks "are you currently on an OPT, STEM, EAD,
+     * H1-B Visa or any other type of Visa that supports your work
+     * authorization?". The authorization rule below took it on the words
+     * "work authorization" at the end and answered "Yes" - for a US
+     * citizen, who is on no visa at all. That went out on a signed
+     * application, which makes it the worst class of bug in this file:
+     * not an application lost, a false statement sent.
+     *
+     * The two readings are opposite for exactly the people this matters
+     * to. A citizen is authorized and holds no visa; somebody on OPT
+     * holds one and is authorized too. So the question is answered from
+     * the status rather than from the authorization that follows it.
+     *
+     * "Needs sponsorship" is the one status that cannot answer it. It
+     * says nothing about today - an applicant needing sponsorship may be
+     * on an expiring F-1 OPT or may be overseas on no visa whatsoever -
+     * so it parks and asks rather than guessing between the two.
+     */
+    id: "holds-visa",
+    pattern: /\b(?:are|were) you (?:currently )?(?:on|holding) (?:an?|any)\b[^?]{0,60}\bvisas?\b|\bdo you (?:currently )?hold (?:an?|any)\b[^?]{0,60}\bvisas?\b|\bare you (?:currently )?(?:an? )?visa holder\b/,
+    sensitive: true,
+    value: (p) => {
+      if (p.workAuthorization === "visa-holder") return "Yes";
+      if (p.workAuthorization === "us-citizen" || p.workAuthorization === "permanent-resident") return "No";
+      return "";
+    },
   },
   {
     id: "authorization",
@@ -1438,7 +1503,18 @@ const RULES = [
     // nothing, and the rule having fired is what stopped the question
     // reaching anything that could answer it. A board that wants the count
     // offers counts; one that wants the judgement offers two words.
-    when: (field) => field.tag !== "textarea" && !yesNoControl(field),
+    // And not a question asking *which* tools. "Which programming
+    // languages and tools do you consider yourself most proficient in?"
+    // and "what languages, frameworks and libraries are you most
+    // proficient with?" both match on "proficien" and both want a list;
+    // Hims & Hers was sent "9" for each of them. A question naming one
+    // tool and asking how well - "rate your proficiency in SQL" - is
+    // still this rule's, which is why the test is the plural category
+    // rather than the word "proficient".
+    when: (field) =>
+      field.tag !== "textarea" &&
+      !yesNoControl(field) &&
+      !/\b(?:which|what)\b[^?]{0,80}\b(?:languages?|tools?|frameworks?|libraries|platforms?|technologies|stacks?)\b/.test(askedSubject(field)),
     value: (p) => [String(p.techYears ?? 0), `${p.techYears ?? 0} years`, `${p.techYears ?? 0}+ years`],
     pick: (p) => Number(p.techYears) || 0,
   },
@@ -1516,7 +1592,7 @@ const RULES = [
    */
   {
     id: "referral-name",
-    pattern: /related employees?\b|\brelatives? (?:employed|who work)|names? of (?:the |any |your )?(?:relatives?|family members?|referr?er)|referr?er(?:'s)? name|who referred you/,
+    pattern: /related employees?\b|\brelatives? (?:employed|who work)|names? of (?:the |any |your )?(?:relatives?|family members?|referr?er)|referr?er(?:'s)? name|who referred you|what(?:'s| is) their name/,
     when: (field) => field.required && !field.combobox && (field.options?.length ?? 0) === 0,
     value: () => "N/A",
   },

@@ -1316,6 +1316,32 @@
   }
 
   /**
+   * Everything the page sent since Submit, for an attempt that ended
+   * without a confirmation.
+   *
+   * `sent` above answers one question - did the board's own apply
+   * endpoint return 2xx - and when the answer is no there is no way to
+   * tell which of the several reasons it was. Workable has never once
+   * confirmed, nor Rippling; on a night of thirty-nine attempts every
+   * application to either was filed as "possibly sent", which is an
+   * application the run cannot account for and will not retry.
+   *
+   * The candidates are: the board posted somewhere this does not
+   * recognise as an apply address, it used a transport this does not
+   * watch, or it navigated on Submit and took this recorder with it. All
+   * three look identical from `sent`, and are immediately distinct from
+   * the list below - an empty list means the recorder died or never saw
+   * anything, and a list of addresses means the pattern is the problem.
+   */
+  function traffic() {
+    return {
+      submitAt: submitMark,
+      since: requests.filter((request) => request.at >= submitMark).map((request) => ({ method: request.method, url: request.url, status: request.status })),
+      total: requests.length,
+    };
+  }
+
+  /**
    * What the form is complaining about, if anything, after Submit was pressed.
    *
    * Only visible complaints count. Boards keep empty error containers mounted
@@ -1398,5 +1424,5 @@
     };
   }
 
-  window.__ghApply = { inventory, apply, verify, submit, sent, complaints, verification, enterCode, probe, menuOptions, uploadsSettled };
+  window.__ghApply = { inventory, apply, verify, submit, sent, traffic, complaints, verification, enterCode, probe, menuOptions, uploadsSettled };
 })();

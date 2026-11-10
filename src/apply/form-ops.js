@@ -197,7 +197,11 @@ export const formOps = {
     const answer = await within(Math.max(0, grace - Date.now()), () => ask(browser, tabId, frameId, () => (window.__ghApply ? window.__ghApply.sent() : null)));
     if (answer?.ok) return { status: OUTCOMES.CONFIRMED, receipt: `the board accepted the application (${answer.status} from ${pathOf(answer.url)})` };
 
-    return { status: OUTCOMES.UNCERTAIN, reason: "pressed Submit, but no confirmation appeared; treated as sent" };
+    // What the page actually did, for the one outcome that cannot say why
+    // it happened. Best-effort: a page that will not answer this is a page
+    // that has already told us what we needed to know.
+    const traffic = await within(2000, () => ask(browser, tabId, frameId, () => (window.__ghApply ? window.__ghApply.traffic() : null)));
+    return { status: OUTCOMES.UNCERTAIN, reason: "pressed Submit, but no confirmation appeared; treated as sent", traffic };
   },
 };
 

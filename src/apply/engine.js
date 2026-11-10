@@ -370,7 +370,17 @@ export async function applyTo({ request, registry, browser, services = {}, log =
     // Submit was pressed and the page said nothing either way. Recorded as
     // possibly sent, because pressing Submit twice is the one mistake this
     // must never make.
-    return record(OUTCOMES.UNCERTAIN, said.reason ?? "pressed Submit, but no confirmation appeared; treated as sent");
+    // Said on the record as well as kept, because the boards this happens
+    // to are not random: Workable and Rippling have never confirmed once,
+    // so every application to either is one the run cannot account for.
+    // Whether that is an address pattern, a transport, or the page
+    // navigating out from under the recorder is readable here and nowhere
+    // else.
+    if (said.traffic) {
+      const since = said.traffic.since ?? [];
+      log("info", `${request.company} - no confirmation; the page sent ${since.length} request(s) after Submit`, since.map((call) => `${call.method} ${call.status} ${call.url}`).slice(0, 12));
+    }
+    return record(OUTCOMES.UNCERTAIN, said.reason ?? "pressed Submit, but no confirmation appeared; treated as sent", { traffic: said.traffic });
   } catch (error) {
     const message = error?.message ?? String(error);
 
