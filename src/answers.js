@@ -50,6 +50,27 @@ const namesEmployer = (label, company) => {
 
 const yesNoAnswer = value => value === 'yes' ? 'Yes' : value === 'no' ? 'No' : '';
 
+/**
+ * A question about the right to work, whatever else is in the sentence.
+ *
+ * These rules are ordered, and an earlier one matching an incidental
+ * word takes a question the later one owns. That has now cost three
+ * applications in three different ways: "no option for extension of
+ * status" went to the phone-extension rule, "worked for Clear Street"
+ * went to the street rule, and ClickHouse's "do you require sponsorship
+ * by an employer for your right to work in your current location?" went
+ * to the city rule, which offered "Temple, Texas" to a menu of Yes and
+ * No - and would have typed it into a text box.
+ *
+ * Immigration status is the subject most exposed to this, because the
+ * sentences asking about it are long and carry the words half the other
+ * rules watch for. It is also the subject where a wrong answer is a
+ * false statement rather than an untidy one. So the rules that would
+ * otherwise claim one of these sentences stand aside and let the
+ * sponsorship and work-authorization rules have it.
+ */
+const ASKS_STATUS = /\bsponsor\w*|\bvisas?\b|\bwork(?:ing)? authoriz\w*|\bauthoriz(?:ed|ation) to work\b|\bright to work\b|\bwork permit\b|\bh-?1b\b|\bgreen card\b|\bemployment eligib\w*/;
+
 const US_STATES = [
   "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut", "delaware",
   "florida", "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky",
@@ -1067,6 +1088,9 @@ const RULES = [
     // from is a fact about the applicant, and the profile holds it.
     pattern:
       /\bcity\b|\blocation\b|\baddress\b|\bwhere are you (?:located|based)\b|where (?:do|will|would) you (?:intend|plan|expect) to work|where (?:will|would|do) you (?:be )?work(?:ing)? from|^from where/,
+    // "...your right to work in your current location?" is a sponsorship
+    // question wearing the word this rule watches for. See ASKS_STATUS.
+    when: (field) => !ASKS_STATUS.test(askedSubject(field)),
     // A box labelled just "City" (Workday's address form, with the state in
     // its own box) gets the city alone; anything broader gets "City, State".
     value: (p, _ctx, field) => (/^\s*(?:city|town|city\s*\/\s*town)\s*\*?\s*$/i.test(field?.label ?? "") ? p.city : `${p.city}, ${stateName(p.state)}`),
@@ -1114,6 +1138,9 @@ const RULES = [
   {
     id: "residence",
     pattern: /do you (?:currently )?(?:live|reside)|are you (?:a )?resident|are you (?:currently )?(?:located|based|living)/,
+    // "are you authorized to work in the country you are based in" is
+    // not a question about where that is. See ASKS_STATUS.
+    when: (field) => !ASKS_STATUS.test(askedSubject(field)),
     sensitive: true,
     value: (p, _ctx, field) => {
       // Some ask about a named list of states, some about the country, some

@@ -221,6 +221,38 @@ await test('a row time ahead of the clock is not a send time', () => {
   );
 });
 
+// 5. The same hijack again, on the next night's run.
+
+await test('ClickHouse\'s sponsorship question is not answered with a city', () => {
+  // "Do you require sponsorship by an employer for your right to work in
+  // your current location?" went to the city rule, which offered
+  // "Temple, Texas" to a menu of Yes and No and parked the application.
+  // On a text box it would have typed it in - a wrong answer on a real
+  // form rather than an untidy one.
+  for (const label of [
+    'Do you require sponsorship by an employer for your right to work in your current location?',
+    'Will you require visa sponsorship to work in your current location?',
+    'Are you legally authorized to work in the location where this role is based?',
+  ]) {
+    for (const options of [['Yes', 'No'], []]) {
+      const result = ask(label, 'Clickhouse', options);
+      assert.notEqual(result.rule, 'city', label);
+      assert.notEqual(result.rule, 'residence', label);
+      assert.notEqual(result.value, `${PROFILE.city}, ${PROFILE.state}`, `a place is never the answer to: ${label}`);
+    }
+  }
+  assert.equal(ask('Do you require sponsorship by an employer for your right to work in your current location?', 'Clickhouse', ['Yes', 'No']).value, 'No');
+});
+
+await test('the guard does not cost the genuine location questions', () => {
+  for (const label of ['What is your current location?', 'Location (City)', 'City', 'What city are you based in?']) {
+    const result = ask(label, 'Clickhouse');
+    assert.equal(result.outcome, 'fill', label);
+    assert.equal(result.rule, 'city', label);
+    assert.ok(String(result.value).includes(PROFILE.city), label);
+  }
+});
+
 await test('a phone extension box is still left empty', () => {
   // Workday's extension box sits beside the number and is never required,
   // which is why blanking it was safe until a required field matched.
