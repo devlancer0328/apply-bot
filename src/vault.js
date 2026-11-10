@@ -3,6 +3,7 @@ import { atsOf } from "./ats.js";
 /** Application artifacts stored in SQLite, with optional exports through the downloads API. */
 
 import { toBase64, db, stateStorage } from "./store.js";
+import { withDefaults } from "./profile.js";
 
 export const ROOT = "job applied-folder";
 
@@ -102,33 +103,69 @@ export async function save(path, content, { overwrite = false, type = "text/plai
   const blob = content instanceof Blob ? content : new Blob([String(content)], { type });
   await db({ action: "put", table: "files", value: { id: path, path, content: blob, type: blob.type || type, at: Date.now() } });
   const { profile } = await stateStorage.get("profile");
-  if (!profile?.exportFiles) return path;
+  // Through `withDefaults` rather than straight off the stored object: the
+  // profile on disk predates this default and does not carry the key.
+  if (!withDefaults(profile).exportFiles) return path;
   const filename = `${ROOT}/${path}`;
-  const url = await asDataUrl(content, type);
-  // One write to a file at a time. Two overwrites of the run log started in
-  // the same instant - one after the last job, one as the run ended - and
-  // Chrome, finding the file already being written, put up a "Save as"
-  // dialog for the second. Each write waits for the previous write to the
-  // same file to finish.
-  const previous = writing.get(filename) ?? Promise.resolve();
-  const current = previous
-    .catch(() => {})
-    .then(() => chrome.downloads.download({ url, filename, conflictAction: overwrite ? "overwrite" : "uniquify", saveAs: false }))
-    .then(untilDone);
-  writing.set(filename, current);
-  await current;
-  if (writing.get(filename) === current) writing.delete(filename);
-  return filename;
+  // The copy in Downloads is a copy. It is written after the row above and
+  // its failure is reported rather than thrown, because the caller is
+  // partway through archiving an application that was already sent: a
+  // refused download used to abort the archive and take the letter, the
+  // answers and the confirmation screenshot down with it.
+  try {
+    const url = await asDataUrl(content, type);
+    // One write to a file at a time. Two overwrites of the run log started
+    // in the same instant - one after the last job, one as the run ended -
+    // and Chrome, finding the file already being written, put up a "Save
+    // as" dialog for the second. Each write waits for the previous write to
+    // the same file to finish.
+    const previous = writing.get(filename) ?? Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => chrome.downloads.download({ url, filename, conflictAction: overwrite ? "overwrite" : "uniquify", saveAs: false }))
+      .then(untilDone);
+    writing.set(filename, current);
+    await current;
+    if (writing.get(filename) === current) writing.delete(filename);
+    return filename;
+  } catch (error) {
+    reportExport(filename, error?.message ?? String(error));
+    return path;
+  }
 }
 
 const writing = new Map();
 
-/** Resolves once a download has left the in-progress state, or after a few seconds regardless. */
+/**
+ * Said once per reason rather than once per file. A download that is
+ * refused is refused for every file after it, and a run writes a dozen per
+ * application, so the untrimmed version buries the log it is written into.
+ */
+let report = () => {};
+const reported = new Set();
+export const onExportProblem = (fn) => {
+  report = typeof fn === "function" ? fn : () => {};
+  reported.clear();
+};
+function reportExport(filename, message) {
+  if (reported.has(message)) return;
+  reported.add(message);
+  report(`Could not write ${filename} to Downloads: ${message}. The file is in the extension's workspace; the copy on disk was skipped.`);
+}
+
+/**
+ * Resolves once a download has left the in-progress state, or after a few
+ * seconds regardless. A download Chrome gave up on reads as "interrupted"
+ * rather than as an error from `download()`, so it is raised here - the
+ * caller turns it into one report, not a thrown archive.
+ */
 async function untilDone(downloadId) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const [item] = await chrome.downloads.search({ id: downloadId }).catch(() => []);
-    if (!item || item.state !== "in_progress") return;
+    if (!item) return;
+    if (item.state === "interrupted") throw new Error(item.error || "the download was interrupted");
+    if (item.state !== "in_progress") return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }

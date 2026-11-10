@@ -125,9 +125,15 @@ await test("a preparation that never notices the stop cannot hold the batch open
 });
 
 await test("the run loop hands the pipeline a stop grace and its own stopping flag", async () => {
-  const call = background.slice(background.indexOf("await stagedBatch("), background.indexOf("await stagedBatch(") + 900);
-  assert.match(call, /stopGraceMs:STOP_GRACE_MS/, "the batch is told how long a stopped run waits");
-  assert.match(call, /stopped:\(\)=>state\.stopping/, "the batch reads the run's own stop flag");
+  // Every call site, not the first one: the banked-document drain is a
+  // second entry into the pipeline, and a drain that ignores the stop flag
+  // keeps sending applications after the applicant has asked it to stop.
+  const calls = [...background.matchAll(/stagedBatch\(/g)].map(match => background.slice(match.index, match.index + 900).replace(/\s+/g, ""));
+  assert.ok(calls.length >= 2, "both the drain and the discovery loop go through the pipeline");
+  for (const call of calls) {
+    assert.match(call, /stopGraceMs:STOP_GRACE_MS/, "the batch is told how long a stopped run waits");
+    assert.match(call, /stopped:\(\)=>state\.stopping/, "the batch reads the run's own stop flag");
+  }
   assert.match(background, /const STOP_GRACE_MS = \d+/, "the grace is a named constant with its reasoning beside it");
 });
 

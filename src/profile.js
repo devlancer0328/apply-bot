@@ -196,8 +196,19 @@ export const DEFAULT_PROFILE = {
   // who has not set this up cannot submit, whatever these say, and the
   // person who has set it up meant to.
   delayMs: 2000, maxPerRun: 0, maxSubmittedPerRun:0, foregroundTabs: true,
-  exportFiles: false, generateOptionalLetters:false,
+  exportFiles: true, generateOptionalLetters:false, profileRevision: 0,
 };
+/**
+ * Bumped when a shipped default changes in a way that has to reach profiles
+ * already on disk. Only the keys named under the new revision are reset;
+ * everything else the applicant set is left alone.
+ *
+ * 1 - writing the application folder to Downloads. It shipped off, and the
+ *     only switch for it sat at the foot of the data page, so every profile
+ *     in the field had the "job applied-folder" the rest of the extension
+ *     talks about and nothing ever arrived in it.
+ */
+export const PROFILE_REVISION = 1;
 export const MANUAL_MODES = ['write', 'list', 'ignore'];
 export const GENERIC_FILL_MODES = ['off', 'vendors', 'any'];
 /** No record stated, nothing stated, and a record the applicant will describe themselves. */
@@ -222,6 +233,8 @@ export function withDefaults(stored = {}) {
   // to nothing, which is indistinguishable from a broken feed.
   value.fitThreshold=Math.max(0,Math.min(80,Math.floor(Number(value.fitThreshold))||0));
   for (const key of ['autoFetch', 'jobrightRecommend', 'keepRunning', 'foregroundTabs', 'exportFiles','generateOptionalLetters','fillableOnly','allowAccountRegistration','roleFilterEnabled','keepCaptchaTabs','hardBlockers','fitCheckEnabled']) value[key] = typeof value[key] === 'boolean' ? value[key] : DEFAULT_PROFILE[key];
+  if ((Number(stored?.profileRevision) || 0) < 1) value.exportFiles = true;
+  value.profileRevision = PROFILE_REVISION;
   // "Review before sending" used to live here as `dryRun`, filling every
   // form and submitting none. It is gone rather than defaulted off: a
   // machine left in it ran a full night and sent nothing, and a setting

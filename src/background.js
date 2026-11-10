@@ -55,7 +55,7 @@ import { suppliedApplication } from "./pairings.js";
 // Nothing here uses a key any more; one an earlier version saved is dropped.
 forgetKeys().catch(() => {});
 import { missingFromProfile } from "./profile.js";
-import { applicationFolder, dayFolder, logText, MANUAL_ROOT, otherLinksCsv, otherLinksPath, resultsCsv, save, saveJson, stamp } from "./vault.js";
+import { applicationFolder, dayFolder, logText, MANUAL_ROOT, onExportProblem, otherLinksCsv, otherLinksPath, resultsCsv, save, saveJson, stamp } from "./vault.js";
 
 /** The profile's authorization setting, in words a model can use. */
 const AUTHORIZATION_WORDS = {
@@ -197,6 +197,7 @@ function log(level, message, detail) {
   // Nothing may be listening; a closed popup is the normal case, not an error.
   chrome.runtime.sendMessage({ type: "log", entry }).catch(() => {});
 }
+onExportProblem((message) => log("warn", message));
 function jobActivity(job,stage,message){
   const id=job.url||job.id||job.sourceUrl;if(!id)return;const before=state.activeJobs[id];
   state.activeJobs[id]={id,company:job.company||before?.company||'',title:job.title||before?.title||'',stage,message,startedAt:before?.startedAt||Date.now(),updatedAt:Date.now()};

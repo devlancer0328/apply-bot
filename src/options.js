@@ -13,7 +13,7 @@ import { buildQueue, linksFromCsv, sheetCsvUrl, isSignInPage } from './links.js'
 import { classifyPairingFolder, pairingFolders, pairingLink, parsePairedLines, reviewPairings } from './pairings.js';
 import { findTab, focus } from './tabs.js';
 import { chatGptRoundTrip } from './chatgpt.js';
-import { resultsCsv } from './vault.js';
+import { ROOT, resultsCsv } from './vault.js';
 import { bytesToBase64, base64ToBytes } from './codec.js';
 import { buildDocumentPdf } from './vendor/generation.js';
 import { toDocument } from './resume.js';
@@ -270,7 +270,47 @@ const actionHandlers = {
     content.querySelector('#application-detail').innerHTML = `<section class="card"><h2>${h(record.company)} · ${h(record.title)}</h2><p class="muted">${h(record.reason || record.status)}</p><a href="${pages.safeHref(record.applyUrl)}" target="_blank" rel="noreferrer">Open application page ↗</a>${record.detail?.screenshotError ? `<p class="info">Final screenshot could not be completed; the application tab was kept open. ${h(record.detail.screenshotError)}</p>` : ''}${applicationImageUrl ? `<section class="card"><h3>Last saved application page</h3><p class="hint">Saved before the extension finished this attempt. ${h(new Date(screenshot.capturedAt).toLocaleString())}</p><a href="${applicationImageUrl}" target="_blank" rel="noreferrer"><img src="${applicationImageUrl}" alt="Last saved application page" style="display:block;max-width:100%;max-height:650px;object-fit:contain;border:1px solid #ddd;border-radius:8px"></a></section>` : ''}${compensationHtml(record.detail?.compensation)}<div class="file-list">${files.map(f => button('download-file',f.path === screenshot?.path ? 'Last page screenshot (PNG)' : h(f.path.slice(folder.length+1)),'',`data-id="${h(f.id)}"`)).join('') || '<p class="muted">No archived files for this result.</p>'}</div></section>`;
   },
   'download-file':async target => { const file = await db({action:'get',table:'files',id:target.dataset.id}); if (file) download(file.content,file.path.split('/').at(-1),file.type); },
+  // Everything the workspace holds, written to disk under the folder names
+  // the runs would have used. For the profiles that applied for weeks with
+  // the export switched off: the documents are all in SQLite, and this is
+  // how they come out without replaying a single application.
+  'export-workspace':async target => {
+    const files = await db({action:'fileMetadata',prefix:''});
+    if (!files.length) { notify('Nothing archived yet, so there is nothing to write out.'); return; }
+    const label = target.textContent;
+    let written = 0, failed = 0, firstError = '';
+    for (const metadata of files) {
+      const file = await db({action:'get',table:'files',id:metadata.id});
+      if (!file?.content) continue;
+      try { await writeToDownloads(file.content, `${ROOT}/${file.path}`); written += 1; }
+      catch (error) { failed += 1; firstError ||= error?.message ?? String(error); }
+      target.textContent = `Writing ${written + failed} of ${files.length}…`;
+    }
+    target.textContent = label;
+    notify(`${written} file(s) written to Downloads/${ROOT}/.${failed ? ` ${failed} could not be written: ${firstError}` : ''}`);
+  },
 };
+/**
+ * Through the downloads API rather than an anchor, because an anchor's
+ * `download` attribute cannot name a folder - the browser flattens the path
+ * and the company-and-role folders are most of what makes the export worth
+ * having. A page may hand it a blob URL; a service worker may not, which is
+ * why src/vault.js takes the longer data: URL route.
+ */
+async function writeToDownloads(content, filename) {
+  const url = URL.createObjectURL(content instanceof Blob ? content : new Blob([String(content)]));
+  try {
+    const id = await chrome.downloads.download({ url, filename, conflictAction: 'overwrite', saveAs: false });
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const [item] = await chrome.downloads.search({ id }).catch(() => []);
+      if (!item) break;
+      if (item.state === 'interrupted') throw new Error(item.error || 'the download was interrupted');
+      if (item.state !== 'in_progress') break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  } finally { setTimeout(() => URL.revokeObjectURL(url), 30000); }
+}
 const showApplicationDetail = actionHandlers['application-detail'];
 actionHandlers['application-detail'] = async target => {
   await showApplicationDetail(target);
