@@ -38,7 +38,7 @@ import { recommendedJobs } from "./jobright.js";
 import { createVerificationService } from "./apply/verification.js";
 import { OUTCOMES } from "./apply/contract.js";
 import { chromeBrowserOps } from "./apply/chrome-ops.js";
-import { applyThroughModule, moduleEngine } from "./apply/run-bridge.js";
+import { applyThroughModule, forgetBoardTrials, moduleEngine } from "./apply/run-bridge.js";
 import { atFront, disown, findTab, focus, hold, openTab as openInFront, reapTabs, releaseOwned, resident } from "./tabs.js";
 import { boardStarted, boardWaitMs, dayProgress, emptyLedger, nextRun, recordDiscovered, recordOutcome, rollDay, withScheduleDefaults } from "./schedule.js";
 import { createHealth } from "./health.js";
@@ -3146,6 +3146,9 @@ async function runInternal() {
   }
 
   const runStamp = stamp();
+  // Whether a board's captcha is answerable from here is a fact about this
+  // browser on this connection, and a new run may be neither.
+  forgetBoardTrials();
   const identify = (entry) => (entry.application ? entry.application.id : canonicalUrl(entry.link));
   const seenThisRun = new Set();
   const discovery=new DiscoveryRounds(sources.length);

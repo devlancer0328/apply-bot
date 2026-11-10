@@ -39,7 +39,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { parseHTML } from "linkedom";
 
-import { applyThroughModule, moduleEngine, toRunResult } from "../src/apply/run-bridge.js";
+import { applyThroughModule, forgetBoardTrials, moduleEngine, noteLeverOutcome, toRunResult } from "../src/apply/run-bridge.js";
 import { createAdapterRegistry, OUTCOMES } from "../src/apply/contract.js";
 import { answerContext } from "../src/apply/answer-context.js";
 import { ashbyAdapter } from "../src/apply/adapters/ashby.js";
@@ -579,13 +579,43 @@ await test("ApplyToJob stays on the original filler, because only that one can t
   assert.equal(moduleEngine({ applyEngine: "module" }, "https://boards.greenhouse.io/acme/jobs/1"), true);
 });
 
-// Lever shows its hCaptcha puzzle only after Submit, so the module reaches
-// the wall having already claimed the employer. Measured on a real VGS
-// submission: filled, claimed, pressed, challenged, nothing sent.
-await test("Lever stays on the original filler, because the module claims the employer and then loses it to a puzzle", () => {
-  assert.equal(moduleEngine({ applyEngine: "module" }, "https://jobs.lever.co/acme/1-2-3"), false);
-  assert.equal(moduleEngine({ applyEngine: "module" }, "https://jobs.lever.co/verygoodsecurity/abc/apply"), false);
+// Lever shows its hCaptcha puzzle only after Submit. Whether that puzzle
+// is a picture to click or a token issued silently depends on the address
+// the browser is on, so the board is asked rather than assumed: Submit is
+// pressed until three postings in a row come back with a puzzle, and from
+// then on Lever is filled and foldered without being sent, which is what
+// it used to do from the first posting.
+await test("Lever is tried, and stops being tried once its puzzle has answered three times", () => {
+  forgetBoardTrials();
+  const posting = "https://jobs.lever.co/acme/1-2-3";
+  assert.equal(moduleEngine({ applyEngine: "module" }, posting), true, "the first Lever posting is submitted");
+
+  noteLeverOutcome(OUTCOMES.CHALLENGE);
+  noteLeverOutcome(OUTCOMES.CHALLENGE);
+  assert.equal(moduleEngine({ applyEngine: "module" }, posting), true, "two puzzles is not yet a pattern");
+
+  noteLeverOutcome(OUTCOMES.CHALLENGE);
+  assert.equal(moduleEngine({ applyEngine: "module" }, posting), false, "three puzzles and the run stops pressing Submit on Lever");
+  assert.equal(moduleEngine({ applyEngine: "module" }, "https://boards.greenhouse.io/acme/jobs/1"), true, "and no other board is affected");
+
+  forgetBoardTrials();
+  assert.equal(moduleEngine({ applyEngine: "module" }, posting), true, "a new run asks again, being possibly a new browser and address");
 });
+
+await test("One Lever application through forgets the puzzles before it", () => {
+  forgetBoardTrials();
+  const posting = "https://jobs.lever.co/verygoodsecurity/abc/apply";
+  noteLeverOutcome(OUTCOMES.CHALLENGE);
+  noteLeverOutcome(OUTCOMES.CHALLENGE);
+  noteLeverOutcome(OUTCOMES.CONFIRMED);
+  noteLeverOutcome(OUTCOMES.CHALLENGE);
+  noteLeverOutcome(OUTCOMES.CHALLENGE);
+  assert.equal(moduleEngine({ applyEngine: "module" }, posting), true, "the count runs from the last one that went through");
+  noteLeverOutcome(OUTCOMES.CHALLENGE);
+  assert.equal(moduleEngine({ applyEngine: "module" }, posting), false);
+  forgetBoardTrials();
+});
+
 
 /* ------------------------------------- the mapping, over every outcome */
 

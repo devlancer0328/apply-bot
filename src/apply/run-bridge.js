@@ -47,25 +47,52 @@ import { atsOf } from "../ats.js";
  * turn applications the bot sends today into folders for a person, so they
  * keep the path that can send them until something here can tick a box.
  *
- * Lever is here for the opposite reason: not a board the module fails to
- * drive, but one it drives all the way to a loss. Lever hides hCaptcha
- * until Submit is pressed and then shows a puzzle, so the module fills the
- * form perfectly, claims the employer, presses Submit and meets a wall -
- * `challenge` with `submitted: true`, no application sent, and the
- * employer spent. That was measured on a real VGS submission rather than
- * reasoned about. The legacy path's blanket refusal to submit Lever looks
- * timid beside an adapter that can fill the form, and is the better trade
- * by a wide margin: it fills, writes the answers into a folder a person
- * can finish in a minute, and claims nothing. Until something here can
- * solve a puzzle, the choice on Lever is between a folder and a burned
- * employer, and a run of three hundred makes that choice a hundred times.
+ * Lever used to be here too, and is not any more. See `leverSubmits`.
  */
-const LEGACY_ONLY = new Set(["applytojob", "lever"]);
+const LEGACY_ONLY = new Set(["applytojob"]);
+
+/**
+ * Whether Lever's Submit is worth pressing on this machine, asked once per
+ * posting and answered by what the last few postings did.
+ *
+ * Lever hides hCaptcha until Submit is pressed. From a datacenter address
+ * that is the picture puzzle, and the module fills the form perfectly,
+ * presses Submit and meets a wall - measured on a real VGS submission. So
+ * Lever was refused outright: fill it, write the folder, never press
+ * Submit. Seven finished applications a night went into folders under that
+ * rule, on a machine running a real browser on a home connection, where
+ * hCaptcha's usual answer to a warm profile is a token and no puzzle at
+ * all. Nobody had checked, because the rule meant nobody ever pressed it.
+ *
+ * So it is checked, and the board's own behaviour is the answer. Three
+ * puzzles in a row and the pressing stops for the rest of the run, which
+ * is the old rule reached by evidence instead of assumption; one
+ * application through and the count goes back to nothing. A claimed
+ * employer is not at risk either way - a puzzle releases the claim, which
+ * is the same reason pressing Submit here is affordable at all.
+ */
+const LEVER_PUZZLE_LIMIT = 3;
+let leverPuzzles = 0;
+
+export const leverSubmits = () => leverPuzzles < LEVER_PUZZLE_LIMIT;
+
+/** Called at the start of a run: a new browser, a new address, a new answer. */
+export function forgetBoardTrials() {
+  leverPuzzles = 0;
+}
+
+/** What one Lever attempt says about the next one. */
+export function noteLeverOutcome(status) {
+  if (status === OUTCOMES.CHALLENGE) leverPuzzles += 1;
+  else if ([OUTCOMES.CONFIRMED, OUTCOMES.UNCERTAIN].includes(status)) leverPuzzles = 0;
+}
 
 /** Whether this posting goes through the apply module. */
 export function moduleEngine(profile = {}, applyUrl = "") {
   if (profile.applyEngine === "legacy") return false;
-  return !LEGACY_ONLY.has(atsOf(applyUrl));
+  const board = atsOf(applyUrl);
+  if (board === "lever") return leverSubmits();
+  return !LEGACY_ONLY.has(board);
 }
 
 /**
@@ -161,6 +188,10 @@ export async function applyThroughModule({ application, profile, context, policy
   // by hand a form that was handed to them at a captcha.
   if (outcome.evidence?.answers?.length > 0) application.answers = outcome.evidence.answers;
   const said = toRunResult(outcome, { review: request.policy.review, claimRefused, claimTaken, securityCode });
+  if (atsOf(request.applyUrl) === "lever") {
+    noteLeverOutcome(outcome.status);
+    if (!leverSubmits()) log("info", `${request.company} - Lever has put up a picture puzzle on every attempt from this machine; the rest of the run fills its forms and writes the folder without pressing Submit`);
+  }
 
   // The claim given back, here rather than by the caller, because the two
   // halves of it have to be one decision. The engine takes the claim in
